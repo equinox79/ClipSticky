@@ -65,7 +65,7 @@ namespace ClipSticky
 
             // 起動時にフォームを表示・前面化
             this.Show();
-            this.Activate();
+            //this.Activate();
 
             // マウスダウンでウィンドウ移動
             this.MouseLeftButtonDown += (s, e) =>
@@ -117,7 +117,7 @@ namespace ClipSticky
                     TryRenderClipboard();
                     // クリップボード更新時にウィンドウを前面に表示
                     this.Show();
-                    this.Activate();
+                    //this.Activate();
                     this.Topmost = true;
                     this.Topmost = false; // Topmost解除（必要なら）
                 }

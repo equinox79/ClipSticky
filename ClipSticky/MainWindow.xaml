@@ -10,7 +10,7 @@
         AllowsTransparency="True"
         Opacity="0.96"
         ShowInTaskbar="False">
-    <Border CornerRadius="12" BorderBrush="#80444444" BorderThickness="1" Padding="10" Background="#FFFFF7C8">
+    <Border BorderBrush="#80444444" BorderThickness="1" Padding="10" Background="#FFFFF7C8">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel>
                 <TextBlock Text="{Binding TitleText}" FontWeight="Bold" Margin="0,0,0,6"/>
