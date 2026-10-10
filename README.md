@@ -14,6 +14,14 @@
 
 - Windows 10 / 11(角丸と枠線の色は Windows 11 のみ。Windows 10 では角が四角になります)
 
+## インストール
+
+[Releases](https://github.com/equinox79/ClipSticky/releases) から `ClipSticky-vX.Y.Z-windows-x64.zip` をダウンロードし、
+展開した `clipsticky.exe` を好きな場所に置いて実行してください。インストーラーはありません。
+削除するときは exe を消すだけです(設定は `%APPDATA%\ClipSticky` に残ります)。
+
+署名していないため、初回起動時に Windows の SmartScreen が警告を出すことがあります。
+その場合は「詳細情報」→「実行」を選んでください。zip と同じ場所にある `.sha256` ファイルで、ダウンロードしたファイルを確認できます。
 ## ビルドと実行
 
 [Rust](https://www.rust-lang.org/tools/install)(stable)が必要です。
@@ -103,3 +111,7 @@ font_size=16
 ## 履歴
 
 元は C#(WPF)で書かれていましたが、Rust(Win32)に書き換えました。以前の実装は Git の履歴に残っています。
+
+## ライセンス
+
+[MIT License](LICENSE)

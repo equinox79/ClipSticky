@@ -2,6 +2,15 @@
 name = "clipsticky"
 version = "0.1.0"
 edition = "2024"
+description = "クリップボードの最新の内容を付箋のように表示する常駐アプリ"
+license = "MIT"
+repository = "https://github.com/equinox79/ClipSticky"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
 
 [dependencies]
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
