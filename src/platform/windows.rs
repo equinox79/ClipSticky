@@ -1,10 +1,11 @@
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{ClientToScreen, CreateRectRgn, SetWindowRgn};
 use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
 use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
+use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// クリップボードが変わるたびに増える番号
@@ -33,10 +34,35 @@ fn hwnd(frame: &eframe::Frame) -> Option<HWND> {
     }
 }
 
+/// ウィンドウの枠(非クライアント領域)の再描画を止める。
+///
+/// winit は影のために WS_CAPTION を残している。そのため、ウィンドウがアクティブになる(右クリックメニューを出す)と、
+/// Windows がタイトルバーと枠を描いて、付箋の上と左に白い帯が出てしまう。
+/// 枠なしウィンドウの定番の対処として、WM_NCACTIVATE の再描画の指示(lParam = -1)と、WM_NCPAINT を止める
+unsafe extern "system" fn frame_guard(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _subclass_id: usize,
+    _ref_data: usize,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_NCACTIVATE => DefSubclassProc(hwnd, msg, wparam, LPARAM(-1)),
+            WM_NCPAINT => LRESULT(0),
+            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
 /// ウィンドウ作成後に 1 回呼ぶ: フォーカスを奪わない・タスクバーに出さない・枠線を消す
 pub fn prepare_window(frame: &eframe::Frame) {
     let Some(hwnd) = hwnd(frame) else { return };
     HWND_VALUE.store(hwnd.0 as isize, Ordering::Relaxed);
+    unsafe {
+        let _ = SetWindowSubclass(hwnd, Some(frame_guard), 1, 0);
+    }
     ensure_style();
     unsafe {
         // 枠線を消し(DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE)、DWM の角丸もやめる(角丸は自前で描く)
@@ -114,6 +140,24 @@ pub fn ensure_style() {
             let want = (ex | (WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0) as isize) & !(WS_EX_APPWINDOW.0 as isize);
             if ex != want {
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want);
+            }
+
+            // タイトルバー(WS_CAPTION)を外す。winit は影のために残しているが、あると、ウィンドウがアクティブになったとき
+            // (右クリックメニューを出したとき)に、Windows がタイトルバーを描いて、付箋の上に白い帯が出てしまう。
+            // リサイズに使う WS_THICKFRAME は残す
+            let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+            let caption = WS_CAPTION.0 as isize;
+            if style & caption != 0 {
+                SetWindowLongPtrW(hwnd, GWL_STYLE, style & !caption);
+                let _ = SetWindowPos(
+                    hwnd,
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                );
             }
         }
     }
