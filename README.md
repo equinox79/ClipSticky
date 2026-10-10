@@ -90,7 +90,7 @@ font=Meiryo
 font_size=16
 ```
 
-`theme` は `yellow` / `light` / `dark`、`view` は `normal` / `controls` / `codes` です。ackground、ont、ont_size は省略できます。ファイルを消すと初期状態に戻ります。
+`theme` は `yellow` / `light` / `dark`、`view` は `normal` / `controls` / `codes` です。`background`、`font`、`font_size` は省略できます。ファイルを消すと初期状態に戻ります。
 
 ## 仕組み
 
