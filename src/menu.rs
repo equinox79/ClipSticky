@@ -2,6 +2,7 @@
 
 use muda::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
+use crate::core::convert::{CONVERSION_GROUPS, Conversion, conversion_by_id, conversion_info};
 use crate::core::settings::{
     OPACITY_CHOICES, DEFAULT_OPACITY, Settings, THEMES, Theme, VIEWS, View,
 };
@@ -12,6 +13,8 @@ pub enum Command {
     Show,
     ToggleMonitoring,
     View(View),
+    /// テキストを変換して、クリップボードに入れ直す
+    Convert(Conversion),
     Theme(Theme),
     Opacity(u32),
     BackgroundSelect,
@@ -27,6 +30,7 @@ impl Command {
             Command::Show => "show".into(),
             Command::ToggleMonitoring => "toggle".into(),
             Command::View(v) => format!("view:{}", VIEWS.iter().find(|x| x.0 == *v).unwrap().1),
+            Command::Convert(c) => format!("conv:{}", conversion_info(*c).id),
             Command::Theme(t) => format!("theme:{}", THEMES.iter().find(|x| x.0 == *t).unwrap().1),
             Command::Opacity(o) => format!("opacity:{o}"),
             Command::BackgroundSelect => "bg:select".into(),
@@ -46,6 +50,7 @@ impl Command {
                 _ => return None,
             },
             Some(("view", name)) => Command::View(VIEWS.iter().find(|x| x.1 == name)?.0),
+            Some(("conv", id)) => Command::Convert(conversion_by_id(id)?.conversion),
             Some(("theme", name)) => Command::Theme(THEMES.iter().find(|x| x.1 == name)?.0),
             Some(("opacity", n)) => Command::Opacity(n.parse().ok()?),
             Some(("bg", "select")) => Command::BackgroundSelect,
@@ -66,6 +71,8 @@ pub struct AppMenu {
     bg_clear: MenuItem,
     font_info: MenuItem,
     font_reset: MenuItem,
+    /// 「テキストを変換してコピー」。内容がテキストのときだけ使える
+    convert_menu: Submenu,
 }
 
 fn item(cmd: Command, text: &str) -> MenuItem {
@@ -90,6 +97,18 @@ impl AppMenu {
                 (o, CheckMenuItem::with_id(Command::Opacity(o).id(), label, true, false, None))
             })
             .collect();
+        // 変換メニュー: グループごとのサブメニュー
+        let groups: Vec<Submenu> = CONVERSION_GROUPS
+            .iter()
+            .map(|(name, infos)| {
+                let items: Vec<MenuItem> =
+                    infos.iter().map(|i| item(Command::Convert(i.conversion), i.label)).collect();
+                let refs: Vec<&dyn IsMenuItem> = items.iter().map(|m| m as &dyn IsMenuItem).collect();
+                Submenu::with_items(*name, true, &refs).unwrap()
+            })
+            .collect();
+        let group_refs: Vec<&dyn IsMenuItem> = groups.iter().map(|g| g as &dyn IsMenuItem).collect();
+        let convert_menu = Submenu::with_items("テキストを変換してコピー", true, &group_refs).unwrap();
         let bg_select = item(Command::BackgroundSelect, "画像を選択…");
         let bg_clear = item(Command::BackgroundClear, "解除");
         let font_info = MenuItem::with_id("font:info", "", false, None);
@@ -113,6 +132,7 @@ impl AppMenu {
             &toggle,
             &sep1,
             &view_menu,
+            &convert_menu,
             &theme_menu,
             &opacity_menu,
             &bg_menu,
@@ -122,13 +142,15 @@ impl AppMenu {
         ])
         .unwrap();
 
-        let app_menu = AppMenu { menu, toggle, views, themes, opacities, bg_clear, font_info, font_reset };
-        app_menu.sync(settings, monitoring);
+        let app_menu =
+            AppMenu { menu, toggle, views, themes, opacities, bg_clear, font_info, font_reset, convert_menu };
+        app_menu.sync(settings, monitoring, false);
         app_menu
     }
 
     /// 設定や状態に合わせて、チェック・文言・有効/無効を更新する
-    pub fn sync(&self, s: &Settings, monitoring: bool) {
+    pub fn sync(&self, s: &Settings, monitoring: bool, is_text: bool) {
+        self.convert_menu.set_enabled(is_text);
         self.toggle.set_text(if monitoring { "監視を一時停止" } else { "監視を再開" });
         for (v, i) in &self.views {
             i.set_checked(*v == s.view);
@@ -185,6 +207,9 @@ mod tests {
         cmds.extend(VIEWS.iter().map(|v| Command::View(v.0)));
         cmds.extend(THEMES.iter().map(|t| Command::Theme(t.0)));
         cmds.extend(OPACITY_CHOICES.iter().map(|&o| Command::Opacity(o)));
+        cmds.extend(
+            CONVERSION_GROUPS.iter().flat_map(|(_, items)| items.iter().map(|i| Command::Convert(i.conversion))),
+        );
         for c in cmds {
             assert_eq!(Command::from_id(&c.id()), Some(c));
         }

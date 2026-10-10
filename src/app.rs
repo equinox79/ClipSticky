@@ -16,6 +16,8 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIc
 
 use crate::clipboard;
 use crate::core::content::{Content, ImageContent};
+use crate::core::convert::{Conversion, conversion_info, convert};
+use crate::core::encoding::{Candidate, EncodingReport, encode_reports, hex, mojibake_candidates};
 use crate::core::settings::{
     DEFAULT_FONT_SIZE, DEFAULT_SIZE, FONT_SIZE_RANGE, Settings, Theme, View,
 };
@@ -54,9 +56,22 @@ struct FontPicker {
     restore_size: Option<egui::Vec2>,
 }
 
+/// 画面の下に出す通知(コピーしました、など)を出しておく時間
+const NOTICE_DURATION: Duration = Duration::from_secs(3);
+/// エンコード別の表示で、16 進を出すバイト数の上限(長いテキストでは先頭だけ)
+const HEX_PREVIEW_BYTES: usize = 32;
+/// 文字化けの候補で、結果を出す文字数の上限
+const CANDIDATE_PREVIEW_CHARS: usize = 120;
+
 pub struct App {
     settings: Settings,
     content: Content,
+    /// 内容が変わるたびに増える番号(エンコード別・文字化けの結果のキャッシュ用)
+    content_serial: u64,
+    encoding_cache: Option<(u64, Vec<EncodingReport>)>,
+    mojibake_cache: Option<(u64, Vec<Candidate>)>,
+    /// 画面の下に出す通知と、出し始めた時刻
+    notice: Option<(String, Instant)>,
     clipboard_rx: mpsc::Receiver<Content>,
     monitoring: Arc<AtomicBool>,
     menu: AppMenu,
@@ -127,6 +142,10 @@ impl App {
         App {
             settings,
             content: Content::Unknown,
+            content_serial: 0,
+            encoding_cache: None,
+            mojibake_cache: None,
+            notice: None,
             clipboard_rx,
             monitoring,
             menu,
@@ -149,11 +168,57 @@ impl App {
         self.monitoring.load(Ordering::Relaxed)
     }
 
+    fn is_text(&self) -> bool {
+        matches!(self.content, Content::Text(_))
+    }
+
+    fn sync_menu(&self) {
+        self.menu.sync(&self.settings, self.is_monitoring(), self.is_text());
+    }
+
     /// 設定を保存し、メニューと画面に反映する
     fn commit(&mut self, ctx: &egui::Context) {
-        self.menu.sync(&self.settings, self.is_monitoring());
+        self.sync_menu();
         self.settings.save();
         ctx.request_repaint();
+    }
+
+    /// クリップボードの新しい内容に差し替える
+    fn set_content(&mut self, content: Content) {
+        self.content = content;
+        self.content_serial += 1;
+        self.scroll_reset = true;
+        self.sync_menu();
+    }
+
+    /// 画面の下に、しばらく通知を出す
+    fn notify(&mut self, ctx: &egui::Context, message: impl Into<String>) {
+        self.notice = Some((message.into(), Instant::now()));
+        ctx.request_repaint_after(NOTICE_DURATION + Duration::from_millis(100));
+    }
+
+    /// テキストをクリップボードに入れる。入れると、監視スレッドが読み直して、画面の内容も入れ替わる
+    fn copy_text(&mut self, ctx: &egui::Context, text: String, done: &str) {
+        let result = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text));
+        match result {
+            Ok(()) => self.notify(ctx, done),
+            Err(e) => self.notify(ctx, format!("コピーできませんでした: {e}")),
+        }
+    }
+
+    /// テキストを変換して、クリップボードに入れ直す
+    fn convert_and_copy(&mut self, ctx: &egui::Context, conversion: Conversion) {
+        let Content::Text(text) = &self.content else {
+            self.notify(ctx, "テキストのときだけ変換できます");
+            return;
+        };
+        let converted = convert(text, conversion);
+        if converted == *text {
+            self.notify(ctx, "変化はありませんでした");
+            return;
+        }
+        let label = conversion_info(conversion).label;
+        self.copy_text(ctx, converted, &format!("「{label}」を実行して、クリップボードに入れました"));
     }
 
     fn apply_font(&mut self, ctx: &egui::Context) {
@@ -199,6 +264,7 @@ impl App {
                 self.scroll_reset = true;
                 self.commit(ctx);
             }
+            Command::Convert(conversion) => self.convert_and_copy(ctx, conversion),
             Command::Theme(t) => {
                 self.settings.theme = t;
                 apply_visuals(ctx, t);
@@ -392,6 +458,15 @@ impl App {
         let reset = std::mem::take(&mut self.scroll_reset);
         let text_color = pal.text;
 
+        // エンコード別・文字化けは、専用の画面(テキストのときだけ)
+        if self.is_text() {
+            match self.settings.view {
+                View::Encodings => return self.ui_encodings(ui, area, pal, reset),
+                View::Mojibake => return self.ui_mojibake(ui, area, pal, reset),
+                _ => {}
+            }
+        }
+
         let scroll = |reset: bool| {
             let mut s = ScrollArea::vertical()
                 .id_salt("content")
@@ -467,6 +542,105 @@ impl App {
                     ui.add(Label::new(job).wrap().selectable(false));
                 });
             }
+        }
+    }
+
+    /// エンコード別: UTF-8 / UTF-16 / Shift_JIS / EUC-JP / ISO-2022-JP で書き出したバイト列。
+    /// 行をクリックすると、そのバイト列(16 進)をコピーする
+    fn ui_encodings(&mut self, ui: &mut egui::Ui, area: Rect, pal: &Palette, reset: bool) {
+        let Content::Text(text) = &self.content else { return };
+        if self.encoding_cache.as_ref().map(|c| c.0) != Some(self.content_serial) {
+            self.encoding_cache = Some((self.content_serial, encode_reports(text)));
+        }
+        let reports = &self.encoding_cache.as_ref().expect("just filled").1;
+        let px = self.settings.font_size as f32;
+        let warn = warn_color(self.settings.theme);
+        let small = |color| TextFormat::simple(FontId::proportional(px - 2.0), color);
+        let mut clicked: Option<(String, String)> = None;
+
+        content_scroll("encodings", reset).show(ui, |ui| {
+            ui.set_width(area.width());
+            for r in reports {
+                let mut job = LayoutJob::default();
+                job.wrap.max_width = area.width();
+                job.append(r.label, 0.0, TextFormat::simple(FontId::proportional(px), pal.text));
+                job.append(&format!("   {} バイト", r.bytes.len()), 0.0, small(pal.muted));
+                if !r.unmappable.is_empty() {
+                    job.append("   変換できない文字あり", 0.0, small(warn));
+                }
+                let shown = &r.bytes[..r.bytes.len().min(HEX_PREVIEW_BYTES)];
+                let more = if r.bytes.len() > HEX_PREVIEW_BYTES { " …" } else { "" };
+                job.append(
+                    &format!("\n{}{more}", hex(shown)),
+                    0.0,
+                    TextFormat::simple(FontId::monospace(px - 3.0), pal.muted),
+                );
+                if !r.unmappable.is_empty() {
+                    let list: Vec<String> = r.unmappable.iter().map(|c| c.to_string()).collect();
+                    let more = if r.unmappable_truncated { " …" } else { "" };
+                    job.append(&format!("\n変換できない文字: {}{more}", list.join(" ")), 0.0, small(warn));
+                }
+                let response = ui
+                    .add(Label::new(job).wrap().sense(Sense::click()))
+                    .on_hover_text("クリックで、このバイト列(16 進)をコピー")
+                    .on_hover_cursor(CursorIcon::PointingHand);
+                if response.clicked() {
+                    clicked = Some((hex(&r.bytes), format!("{} のバイト列(16 進)をクリップボードに入れました", r.label)));
+                }
+                ui.add_space(6.0);
+            }
+        });
+        if let Some((text, done)) = clicked {
+            self.copy_text(&ui.ctx().clone(), text, &done);
+        }
+    }
+
+    /// 文字化けを直す: 読み違えの組み合わせを試して、読める結果になったものを並べる。
+    /// 候補をクリックすると、直した結果をコピーする
+    fn ui_mojibake(&mut self, ui: &mut egui::Ui, area: Rect, pal: &Palette, reset: bool) {
+        let Content::Text(text) = &self.content else { return };
+        if self.mojibake_cache.as_ref().map(|c| c.0) != Some(self.content_serial) {
+            self.mojibake_cache = Some((self.content_serial, mojibake_candidates(text)));
+        }
+        let candidates = &self.mojibake_cache.as_ref().expect("just filled").1;
+        let px = self.settings.font_size as f32;
+        let mut clicked: Option<String> = None;
+
+        content_scroll("mojibake", reset).show(ui, |ui| {
+            ui.set_width(area.width());
+            if candidates.is_empty() {
+                let mut job = LayoutJob::default();
+                job.wrap.max_width = area.width();
+                job.append(
+                    "文字化けを直せそうな候補は、見つかりませんでした。",
+                    0.0,
+                    TextFormat::simple(FontId::proportional(px), pal.muted),
+                );
+                ui.add(Label::new(job).wrap().selectable(false));
+            }
+            for c in candidates {
+                let mut job = LayoutJob::default();
+                job.wrap.max_width = area.width();
+                job.append(
+                    &format!("{} のバイト列を、{} と読み違えた文字化け\n", c.truly, c.misread_as),
+                    0.0,
+                    TextFormat::simple(FontId::proportional(px - 3.0), pal.muted),
+                );
+                let preview: String = c.text.chars().take(CANDIDATE_PREVIEW_CHARS).collect();
+                let more = if c.text.chars().count() > CANDIDATE_PREVIEW_CHARS { "…" } else { "" };
+                append_text(&mut job, &format!("{preview}{more}"), px, pal.text);
+                let response = ui
+                    .add(Label::new(job).wrap().sense(Sense::click()))
+                    .on_hover_text("クリックで、直した結果をコピー")
+                    .on_hover_cursor(CursorIcon::PointingHand);
+                if response.clicked() {
+                    clicked = Some(c.text.clone());
+                }
+                ui.add_space(8.0);
+            }
+        });
+        if let Some(fixed) = clicked {
+            self.copy_text(&ui.ctx().clone(), fixed, "文字化けを直した結果を、クリップボードに入れました");
         }
     }
 
@@ -556,8 +730,7 @@ impl App {
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         while let Ok(content) = self.clipboard_rx.try_recv() {
-            self.content = content;
-            self.scroll_reset = true;
+            self.set_content(content);
             platform::show();
         }
         while let Ok(cmd) = self.command_rx.try_recv() {
@@ -633,6 +806,8 @@ impl eframe::App for App {
             match (&self.content, self.settings.view) {
                 (Content::Text(_), View::Controls) => "テキスト · 制御文字",
                 (Content::Text(_), View::Codes) => "テキスト · 文字コード",
+                (Content::Text(_), View::Encodings) => "テキスト · エンコード別",
+                (Content::Text(_), View::Mojibake) => "テキスト · 文字化け",
                 (c, _) => type_label(c),
             }
         };
@@ -665,16 +840,24 @@ impl eframe::App for App {
         let painter = ui.painter();
         painter.circle_filled(pos2(footer.left() + 4.0, footer.center().y), 4.0, dot);
         let status = if monitoring { "監視中" } else { "一時停止中" };
-        let info = match detail(&self.content) {
-            d if d.is_empty() => status.to_string(),
-            d => format!("{status}  ·  {d}"),
+        // 通知があるうちは、状態の代わりに通知を出す
+        let notice = self.notice.as_ref().filter(|(_, since)| since.elapsed() < NOTICE_DURATION).map(|(m, _)| m.clone());
+        let (info, info_color) = match notice {
+            Some(message) => (message, pal.text),
+            None => (
+                match detail(&self.content) {
+                    d if d.is_empty() => status.to_string(),
+                    d => format!("{status}  ·  {d}"),
+                },
+                pal.muted,
+            ),
         };
         painter.with_clip_rect(footer).text(
             pos2(footer.left() + 16.0, footer.center().y),
             Align2::LEFT_CENTER,
             info,
             small,
-            pal.muted,
+            info_color,
         );
         for k in 1..=3 {
             let d = 4.0 * k as f32;
@@ -706,6 +889,23 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.settings.save();
     }
+}
+
+/// 内容の領域のスクロール。`reset` なら先頭に戻す
+fn content_scroll(id: &str, reset: bool) -> ScrollArea {
+    let mut scroll = ScrollArea::vertical()
+        .id_salt(id)
+        .auto_shrink([false, false])
+        .scroll_source(ScrollSource::MOUSE_WHEEL | ScrollSource::SCROLL_BAR);
+    if reset {
+        scroll = scroll.vertical_scroll_offset(0.0);
+    }
+    scroll
+}
+
+/// 警告の色(変換できない文字など)
+fn warn_color(theme: Theme) -> Color32 {
+    if theme == Theme::Dark { Color32::from_rgb(0xFF, 0x9F, 0x0A) } else { Color32::from_rgb(0xB4, 0x50, 0x00) }
 }
 
 /// `job` に文字列を足す。日本語フォントはバックスラッシュ(U+005C)を円記号(¥)の字形で描くため、
