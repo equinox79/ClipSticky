@@ -15,12 +15,14 @@ panic = "abort"
 [dependencies]
 arboard = "3.6.1"
 eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts"] }
+encoding_rs = "0.8.42"
 fontdb = "0.24.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 muda = "0.21.2"
 raw-window-handle = "0.6.2"
 rfd = "0.17.2"
 tray-icon = "0.26.1"
+unicode-normalization = "0.1.25"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
