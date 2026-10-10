@@ -1,6 +1,6 @@
 # ClipSticky
 
-[日本語](README.md) | **English**
+[日本語](README.md) | **English** | [Website](https://equinox79.github.io/ClipSticky/en/)
 
 A small resident app that shows the latest clipboard contents as a sticky note in the corner of your screen.
 The note updates every time you copy, and it never steals focus from the app you are working in.

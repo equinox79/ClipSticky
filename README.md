@@ -1,6 +1,6 @@
 # ClipSticky
 
-**日本語** | [English](README.en.md)
+**日本語** | [English](README.en.md) | [紹介ページ](https://equinox79.github.io/ClipSticky/)
 
 クリップボードの最新の内容を、画面の隅に付箋のように表示する小さな常駐アプリです。
 コピーするたびに表示が更新され、他のアプリのフォーカスは奪いません。Windows と macOS に対応しています(Rust 製)。
