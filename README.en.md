@@ -7,7 +7,7 @@ The note updates every time you copy, and it never steals focus from the app you
 Runs on Windows and macOS (written in Rust).
 
 <p align="center">
-  <img src="docs/images/demo.gif" alt="ClipSticky in action: prose, a multi-line command, an image, files, a character code list and text conversion shown on a sticky note" width="540">
+  <img src="docs/images/en/demo.gif" alt="ClipSticky in action: prose, a multi-line command, an image, files, a character code list and text conversion shown on a sticky note" width="540">
 </p>
 
 ## Features
@@ -24,21 +24,21 @@ Runs on Windows and macOS (written in Rust).
 
 ## Screenshots
 
-The screenshots use Japanese text and the Japanese UI. The UI switches to English with the language setting.
+The UI is shown in English. The copied text is Japanese in some of the shots.
 
 <table>
   <tr>
-    <td align="center"><img src="docs/images/scene-1.png" alt="Prose (Yellow theme)" width="320"><br>Prose, shown as is</td>
-    <td align="center"><img src="docs/images/scene-2.png" alt="Multi-line command (Light theme)" width="320"><br>Check a multi-line command</td>
-    <td align="center"><img src="docs/images/scene-3.png" alt="Control characters (Dark theme)" width="320"><br>Show control characters to spot a trailing newline</td>
+    <td align="center"><img src="docs/images/en/scene-1.png" alt="Prose (Yellow theme)" width="320"><br>Prose, shown as is</td>
+    <td align="center"><img src="docs/images/en/scene-2.png" alt="Multi-line command (Light theme)" width="320"><br>Check a multi-line command</td>
+    <td align="center"><img src="docs/images/en/scene-3.png" alt="Control characters (Dark theme)" width="320"><br>Show control characters to spot a trailing newline</td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/scene-4.png" alt="Image" width="320"><br>Images are shown too</td>
-    <td align="center"><img src="docs/images/scene-5.png" alt="File list" width="320"><br>Copied files appear as a path list</td>
-    <td align="center"><img src="docs/images/scene-6.png" alt="Character code list" width="320"><br>Character codes (Unicode / UTF-8)</td>
+    <td align="center"><img src="docs/images/en/scene-4.png" alt="Image" width="320"><br>Images are shown too</td>
+    <td align="center"><img src="docs/images/en/scene-5.png" alt="File list" width="320"><br>Copied files appear as a path list</td>
+    <td align="center"><img src="docs/images/en/scene-6.png" alt="Character code list" width="320"><br>Character codes (Unicode / UTF-8)</td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/images/scene-7.png" alt="Line ending conversion" width="320"><br>Convert line endings and more, then re-copy</td>
+    <td align="center"><img src="docs/images/en/scene-7.png" alt="Line ending conversion" width="320"><br>Convert line endings and more, then re-copy</td>
   </tr>
 </table>
 

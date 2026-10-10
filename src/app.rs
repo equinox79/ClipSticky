@@ -209,7 +209,7 @@ impl App {
             return;
         }
         let label = conversion_info(conversion).label();
-        let done = tr_fmt!("「{label}」を実行して、クリップボードに入れました", "Ran \"{label}\" and put the result on the clipboard");
+        let done = tr_fmt!("「{label}」を実行して、クリップボードに入れました", "Copied: {label}");
         self.copy_text(ctx, converted, &done);
     }
 
