@@ -19,6 +19,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, PWSTR, w};
 
+const APP_NAME: &str = "ClipSticky";
 const DEFAULT_OPACITY: u32 = 96;
 const OPACITY_CHOICES: [u32; 7] = [100, 96, 90, 80, 70, 60, 50];
 /// 背景画像の上に重ねるテーマ色の濃さ(0-255)。大きいほど文字が読みやすい
@@ -167,6 +168,17 @@ struct Palette {
 
 fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
     COLORREF(r as u32 | (g as u32) << 8 | (b as u32) << 16)
+}
+
+/// `fg` を `bg` に `percent`% の濃さで重ねた色
+fn blend(fg: COLORREF, bg: COLORREF, percent: u32) -> COLORREF {
+    let mix = |f: u32, b: u32| ((f * percent + b * (100 - percent)) / 100) as u8;
+    let (f, b) = (fg.0, bg.0);
+    rgb(
+        mix(f & 0xFF, b & 0xFF),
+        mix((f >> 8) & 0xFF, (b >> 8) & 0xFF),
+        mix((f >> 16) & 0xFF, (b >> 16) & 0xFF),
+    )
 }
 
 fn palette(theme: Theme) -> Palette {
@@ -769,15 +781,24 @@ unsafe fn paint(hwnd: HWND) {
             draw_background(mem, &mut st, w, h, &pal);
 
             // ヘッダー: 種類ラベルと閉じるボタン
-            let old_font = SelectObject(mem, label.into());
+            // アプリ名(控えめに、背景に溶け込む薄い色で)
+            let old_font = SelectObject(mem, small.into());
+            SetTextColor(mem, blend(pal.muted, pal.bg, 55));
+            let mut name_rc = l.header;
+            draw_text(mem, APP_NAME, &mut name_rc, DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT);
+            let mut r = RECT { top: l.header.top, bottom: l.header.bottom, ..name_rc };
+            draw_text(mem, APP_NAME, &mut r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+            // 種類ラベル(アプリ名の右隣)
+            SelectObject(mem, label.into());
             SetTextColor(mem, pal.muted);
-            let mut r = l.header;
+            let mut r = RECT { left: name_rc.right + s(10), ..l.header };
             let header = match (&st.content, view) {
                 (Content::Text(_), View::Controls) => "テキスト · 制御文字",
                 (Content::Text(_), View::Codes) => "テキスト · 文字コード",
                 (content, _) => type_label(content),
             };
-            draw_text(mem, header, &mut r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            draw_text(mem, header, &mut r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
             SelectObject(mem, glyph.into());
             let mut r = l.close;
             draw_text(mem, "×", &mut r, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
