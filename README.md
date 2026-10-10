@@ -3,6 +3,10 @@
 クリップボードの最新の内容を、画面の隅に付箋のように表示する小さな常駐アプリです。
 コピーするたびに表示が更新され、他のアプリのフォーカスは奪いません。Windows と macOS に対応しています(Rust 製)。
 
+<p align="center">
+  <img src="docs/images/demo.gif" alt="ClipSticky の動作: 文章・複数行のコマンド・画像・ファイル・文字コードを付箋に表示" width="576">
+</p>
+
 - テキスト・画像・ファイル(コピーしたファイルのパス一覧)に対応
 - 最前面・タスクバー/Dock に出ない・フォーカスを奪わない
 - 角丸のモダンなデザイン。テーマ(イエロー / ライト / ダーク)を切り替え可能
@@ -12,6 +16,27 @@
 
 > **macOS 版について**: 型検査とビルドは通っていますが、実機での動作確認はこれからです。
 > 特に「フォーカスを奪わない」挙動は、Mac 上での確認が必要です。不具合があれば Issue で教えてください。
+
+## スクリーンショット
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/scene-1.png" alt="文章(イエローのテーマ)" width="320"><br>文章をそのまま表示</td>
+    <td align="center"><img src="docs/images/scene-2.png" alt="複数行のコマンド(ライトのテーマ)" width="320"><br>複数行のコマンドを確認</td>
+    <td align="center"><img src="docs/images/scene-3.png" alt="制御文字の表示(ダークのテーマ)" width="320"><br>制御文字を表示して、末尾の改行に気づく</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/scene-4.png" alt="画像" width="320"><br>画像もそのまま見られる</td>
+    <td align="center"><img src="docs/images/scene-5.png" alt="ファイルの一覧" width="320"><br>コピーしたファイルはパスの一覧</td>
+    <td align="center"><img src="docs/images/scene-6.png" alt="文字コード一覧" width="320"><br>文字コード(Unicode / UTF-8)の一覧</td>
+  </tr>
+</table>
+
+「制御文字を表示」にすると、コピーした複数行のコマンドの末尾に改行(`↓`)が含まれているかどうかが一目で分かります。
+ターミナルに貼り付けたときに、うっかり実行されるのを防げます。
+
+サンプルの文章は、夏目漱石『吾輩は猫である』(1905 年)の冒頭です。著作権の保護期間が満了しており、自由に利用できます。
+画像は、このために描いたものです。
 
 ## インストール
 
