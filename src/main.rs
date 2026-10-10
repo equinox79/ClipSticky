@@ -43,6 +43,121 @@ const THEMES: [(Theme, &str, &str); 3] = [
     (Theme::Dark, "dark", "ダーク"),
 ];
 
+// ---------- テキストの表示形式 ----------
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum View {
+    Normal,
+    Controls,
+    Codes,
+}
+
+const VIEWS: [(View, &str, &str); 3] = [
+    (View::Normal, "normal", "通常"),
+    (View::Controls, "controls", "制御文字を表示"),
+    (View::Codes, "codes", "文字コード一覧"),
+];
+
+/// 表示するテキストの上限(これを超える分は省略する。描画が重くなるため)
+const MAX_DISPLAY_CHARS: usize = 20_000;
+/// 文字コード一覧で表示する文字数の上限
+const MAX_CODE_ROWS: usize = 1_000;
+
+const CONTROL_NAMES: [&str; 32] = [
+    "NUL", "SOH", "STX", "ETX", "EOT", "ENQ", "ACK", "BEL", "BS", "HT", "LF", "VT", "FF", "CR", "SO",
+    "SI", "DLE", "DC1", "DC2", "DC3", "DC4", "NAK", "SYN", "ETB", "CAN", "EM", "SUB", "ESC", "FS",
+    "GS", "RS", "US",
+];
+
+/// 目に見えない文字・空白・制御文字の(表示用の記号, 名前)。普通の文字なら None
+fn special_char(c: char) -> Option<(String, String)> {
+    let code = c as u32;
+    let pair = |sym: &str, name: &str| Some((sym.to_string(), name.to_string()));
+    match code {
+        0x09 => pair("⟦TAB⟧", "HT (TAB)"),
+        0x00..=0x1F => {
+            let name = CONTROL_NAMES[code as usize];
+            Some((format!("⟦{name}⟧"), name.to_string()))
+        }
+        0x20 => pair("·", "SPACE"),
+        0x7F => pair("⟦DEL⟧", "DEL"),
+        0x80..=0x9F => Some((format!("⟦{code:02X}⟧"), "C1 CONTROL".to_string())),
+        0xA0 => pair("⟦NBSP⟧", "NO-BREAK SPACE"),
+        0xAD => pair("⟦SHY⟧", "SOFT HYPHEN"),
+        0x2028 => pair("⟦LS⟧", "LINE SEPARATOR"),
+        0x2029 => pair("⟦PS⟧", "PARAGRAPH SEPARATOR"),
+        0x200B => pair("⟦ZWSP⟧", "ZERO WIDTH SPACE"),
+        0x200C => pair("⟦ZWNJ⟧", "ZERO WIDTH NON-JOINER"),
+        0x200D => pair("⟦ZWJ⟧", "ZERO WIDTH JOINER"),
+        0x200E => pair("⟦LRM⟧", "LEFT-TO-RIGHT MARK"),
+        0x200F => pair("⟦RLM⟧", "RIGHT-TO-LEFT MARK"),
+        0xFEFF => pair("⟦BOM⟧", "BOM / ZWNBSP"),
+        0x3000 => pair("□", "IDEOGRAPHIC SPACE"),
+        _ => None,
+    }
+}
+
+/// 制御文字を記号に置き換える。改行・タブは記号の後ろで実際にも改行/タブする
+fn show_controls(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + text.len() / 8);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' if chars.peek() == Some(&'\n') => {
+                chars.next();
+                out.push_str("⟦CR⟧⟦LF⟧\n");
+            }
+            '\n' => out.push_str("⟦LF⟧\n"),
+            '\t' => out.push_str("⟦TAB⟧\t"),
+            _ => match special_char(c) {
+                Some((sym, _)) => out.push_str(&sym),
+                None => out.push(c),
+            },
+        }
+    }
+    out
+}
+
+/// 文字コード一覧の 1 行分
+struct CodeRow {
+    shown: String,
+    code: String,
+    utf8: String,
+    name: String,
+}
+
+/// 1 文字 1 行で「文字 / Unicode コードポイント / UTF-8 バイト列 / 名前」を作る。
+/// 2 つ目は、上限を超えて省略した文字数
+fn code_rows(text: &str) -> (Vec<CodeRow>, usize) {
+    let rows = text
+        .chars()
+        .take(MAX_CODE_ROWS)
+        .map(|c| {
+            let special = special_char(c);
+            let mut buf = [0u8; 4];
+            let utf8: Vec<String> = c.encode_utf8(&mut buf).bytes().map(|b| format!("{b:02X}")).collect();
+            CodeRow {
+                shown: special.as_ref().map_or_else(|| c.to_string(), |(s, _)| s.clone()),
+                code: format!("U+{:04X}", c as u32),
+                utf8: utf8.join(" "),
+                name: special.map(|(_, n)| n).unwrap_or_default(),
+            }
+        })
+        .collect();
+    (rows, text.chars().count().saturating_sub(MAX_CODE_ROWS))
+}
+
+/// 通常 / 制御文字表示のときに描画するテキストを作る(長すぎる分は省略)
+fn display_text(text: &str, view: View) -> String {
+    let total = text.chars().count();
+    let body: String = text.chars().take(MAX_DISPLAY_CHARS).collect();
+    let mut shown = if view == View::Controls { show_controls(&body) } else { body };
+    if total > MAX_DISPLAY_CHARS {
+        shown.push_str(&format!("\n…(以降 {} 文字は省略)", total - MAX_DISPLAY_CHARS));
+    }
+    shown
+}
+
 struct Palette {
     bg: COLORREF,
     text: COLORREF,
@@ -116,6 +231,7 @@ struct Settings {
     size: Option<(i32, i32)>,
     opacity: u32,
     theme: Theme,
+    view: View,
     background: Option<String>,
 }
 
@@ -136,6 +252,7 @@ thread_local! {
             size: None,
             opacity: DEFAULT_OPACITY,
             theme: Theme::Yellow,
+            view: View::Normal,
             background: None,
         })
     };
@@ -180,6 +297,11 @@ fn load_settings() {
                         s.theme = t;
                     }
                 }
+                "view" => {
+                    if let Some(&(v, _, _)) = VIEWS.iter().find(|(_, id, _)| *id == value) {
+                        s.view = v;
+                    }
+                }
                 "background" if !value.is_empty() => s.background = Some(value.to_string()),
                 _ => {}
             }
@@ -198,14 +320,16 @@ unsafe fn save_settings(hwnd: HWND) {
     let text = SETTINGS.with(|s| {
         let s = s.borrow();
         let theme = THEMES.iter().find(|(t, _, _)| *t == s.theme).map_or("yellow", |t| t.1);
+        let view = VIEWS.iter().find(|(v, _, _)| *v == s.view).map_or("normal", |v| v.1);
         let mut text = format!(
-            "left={}\ntop={}\nwidth={}\nheight={}\nopacity={}\ntheme={}\n",
+            "left={}\ntop={}\nwidth={}\nheight={}\nopacity={}\ntheme={}\nview={}\n",
             rc.left,
             rc.top,
             rc.right - rc.left,
             rc.bottom - rc.top,
             s.opacity,
-            theme
+            theme,
+            view
         );
         if let Some(bg) = &s.background {
             text.push_str(&format!("background={bg}\n"));
@@ -490,6 +614,9 @@ unsafe fn make_font(dpi: u32, px: i32, bold: bool) -> HFONT {
 }
 
 unsafe fn draw_text(hdc: HDC, text: &str, rc: &mut RECT, flags: DRAW_TEXT_FORMAT) {
+    if text.is_empty() {
+        return; // 空の文字列を DrawTextW に渡すとアクセス違反になることがある
+    }
     let mut buf = wide(text);
     unsafe { DrawTextW(hdc, &mut buf, rc, flags) };
 }
@@ -506,7 +633,12 @@ fn type_label(content: &Content) -> &'static str {
 
 fn detail(content: &Content) -> String {
     match content {
-        Content::Text(t) => format!("{} 文字", t.chars().count()),
+        Content::Text(t) => format!(
+            "{} 文字 · {} 行 · UTF-8 {}B",
+            t.chars().count(),
+            t.lines().count(),
+            t.len()
+        ),
         Content::Image(d) => format!("{}×{}", d.width, d.height),
         Content::Files(t) => format!("{} 件", t.lines().count()),
         Content::Unknown | Content::Error(_) => String::new(),
@@ -611,7 +743,11 @@ unsafe fn paint(hwnd: HWND) {
         let dpi = GetDpiForWindow(hwnd);
         let s = |v: i32| v * dpi as i32 / 96;
         let l = layout(w, h, dpi);
-        let pal = palette(SETTINGS.with(|s| s.borrow().theme));
+        let (theme, view) = SETTINGS.with(|s| {
+            let s = s.borrow();
+            (s.theme, s.view)
+        });
+        let pal = palette(theme);
 
         // ダブルバッファ
         let mem = CreateCompatibleDC(Some(hdc));
@@ -636,7 +772,12 @@ unsafe fn paint(hwnd: HWND) {
             let old_font = SelectObject(mem, label.into());
             SetTextColor(mem, pal.muted);
             let mut r = l.header;
-            draw_text(mem, type_label(&st.content), &mut r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            let header = match (&st.content, view) {
+                (Content::Text(_), View::Controls) => "テキスト · 制御文字",
+                (Content::Text(_), View::Codes) => "テキスト · 文字コード",
+                (content, _) => type_label(content),
+            };
+            draw_text(mem, header, &mut r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
             SelectObject(mem, glyph.into());
             let mut r = l.close;
             draw_text(mem, "×", &mut r, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
@@ -652,16 +793,48 @@ unsafe fn paint(hwnd: HWND) {
             let content_h;
             SetTextColor(mem, pal.text);
             match &st.content {
+                Content::Text(t) if view == View::Codes => {
+                    // 文字コード一覧: 列ごとに描く(画面外の行は飛ばす)
+                    let (rows, omitted) = code_rows(t);
+                    let mut tm = TEXTMETRICW::default();
+                    let _ = GetTextMetricsW(mem, &mut tm);
+                    let row_h = tm.tmHeight + s(4);
+                    let cols = [0, s(76), s(160), s(268)];
+                    let flags = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS;
+                    for (i, row) in rows.iter().enumerate() {
+                        let y = top + i as i32 * row_h;
+                        if y + row_h < area.top || y > area.bottom {
+                            continue;
+                        }
+                        let cells = [&row.shown, &row.code, &row.utf8, &row.name];
+                        for (k, cell) in cells.iter().enumerate() {
+                            SetTextColor(mem, if k < 2 { pal.text } else { pal.muted });
+                            let right = if k < 3 { area.left + cols[k + 1] - s(6) } else { area.right };
+                            let mut r = RECT { left: area.left + cols[k], top: y, right, bottom: y + row_h };
+                            draw_text(mem, cell, &mut r, flags);
+                        }
+                    }
+                    let mut total_rows = rows.len() as i32;
+                    if omitted > 0 {
+                        SetTextColor(mem, pal.muted);
+                        let y = top + total_rows * row_h;
+                        let mut r = RECT { left: area.left, top: y, right: area.right, bottom: y + row_h };
+                        draw_text(mem, &format!("…(以降 {omitted} 文字は省略)"), &mut r, flags);
+                        total_rows += 1;
+                    }
+                    content_h = total_rows * row_h;
+                }
                 Content::Text(t) | Content::Files(t) | Content::Error(t) => {
-                    let text = if matches!(st.content, Content::Error(_)) {
-                        format!("取得エラー: {t}")
-                    } else {
-                        t.clone()
+                    let text = match &st.content {
+                        Content::Error(_) => format!("取得エラー: {t}"),
+                        Content::Text(_) => display_text(t, view),
+                        _ => t.clone(),
                     };
+                    let flags = DT_WORDBREAK | DT_NOPREFIX | DT_EXPANDTABS;
                     let mut r = RECT { left: area.left, top, right: area.right, bottom: top };
-                    draw_text(mem, &text, &mut r, DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+                    draw_text(mem, &text, &mut r, flags | DT_CALCRECT);
                     content_h = r.bottom - top;
-                    draw_text(mem, &text, &mut r, DT_WORDBREAK | DT_NOPREFIX);
+                    draw_text(mem, &text, &mut r, flags);
                 }
                 Content::Unknown => {
                     SetTextColor(mem, pal.muted);
@@ -756,6 +929,7 @@ const CMD_BG_SELECT: usize = 4;
 const CMD_BG_CLEAR: usize = 5;
 const CMD_OPACITY_BASE: usize = 100; // 100 + OPACITY_CHOICES のインデックス
 const CMD_THEME_BASE: usize = 200; // 200 + THEMES のインデックス
+const CMD_VIEW_BASE: usize = 300; // 300 + VIEWS のインデックス
 
 /// 黄色い付箋風の 32x32 アイコンを生成する
 unsafe fn create_icon() -> HICON {
@@ -871,14 +1045,19 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         let monitoring = STATE.with(|s| s.borrow().monitoring);
-        let (opacity, theme, has_bg) = SETTINGS.with(|s| {
+        let (opacity, theme, view, has_bg) = SETTINGS.with(|s| {
             let s = s.borrow();
-            (s.opacity, s.theme, s.background.is_some())
+            (s.opacity, s.theme, s.view, s.background.is_some())
         });
 
         add_item(menu, MF_STRING, CMD_SHOW, "表示");
         add_item(menu, MF_STRING, CMD_TOGGLE, if monitoring { "監視を一時停止" } else { "監視を再開" });
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+        add_submenu(menu, "テキスト表示", |sub| {
+            for (i, &(v, _, name)) in VIEWS.iter().enumerate() {
+                add_item(sub, check(v == view), CMD_VIEW_BASE + i, name);
+            }
+        });
         add_submenu(menu, "テーマ", |sub| {
             for (i, &(t, _, name)) in THEMES.iter().enumerate() {
                 add_item(sub, check(t == theme), CMD_THEME_BASE + i, name);
@@ -928,6 +1107,12 @@ unsafe fn show_tray_menu(hwnd: HWND) {
                 apply_opacity(hwnd, OPACITY_CHOICES[c - CMD_OPACITY_BASE]);
                 save_settings(hwnd);
             }
+            c if (CMD_VIEW_BASE..CMD_VIEW_BASE + VIEWS.len()).contains(&c) => {
+                SETTINGS.with(|s| s.borrow_mut().view = VIEWS[c - CMD_VIEW_BASE].0);
+                STATE.with(|s| s.borrow_mut().scroll = 0);
+                save_settings(hwnd);
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            }
             c if (CMD_THEME_BASE..CMD_THEME_BASE + THEMES.len()).contains(&c) => {
                 apply_theme(hwnd, THEMES[c - CMD_THEME_BASE].0);
                 save_settings(hwnd);
@@ -971,6 +1156,11 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     WM_RBUTTONUP | WM_CONTEXTMENU => show_tray_menu(hwnd),
                     _ => {}
                 }
+                LRESULT(0)
+            }
+            // ウィンドウ上の右クリックでも、トレイと同じメニューを出す
+            WM_NCRBUTTONUP | WM_CONTEXTMENU => {
+                show_tray_menu(hwnd);
                 LRESULT(0)
             }
             m if m != 0 && m == TASKBAR_CREATED.with(|t| t.get()) => {
