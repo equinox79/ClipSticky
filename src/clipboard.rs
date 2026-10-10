@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use eframe::egui;
 
-use crate::core::content::{Content, ImageContent};
+use crate::core::content::{ClipboardError, Content, ImageContent};
 use crate::platform;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(150);
@@ -33,7 +33,7 @@ pub fn spawn(ctx: egui::Context, monitoring: Arc<AtomicBool>) -> mpsc::Receiver<
                     }
                     let content = match clipboard.as_mut() {
                         Some(cb) => read(cb, next_id),
-                        None => Content::Error("クリップボードを開けませんでした。".into()),
+                        None => Content::Error(ClipboardError::Open),
                     };
                     next_id += 1;
                     if tx.send(content).is_err() {
@@ -82,5 +82,5 @@ fn read(cb: &mut arboard::Clipboard, id: u64) -> Content {
         }
         std::thread::sleep(RETRY_INTERVAL);
     }
-    Content::Error("クリップボードが他のプロセスで使用中です。".into())
+    Content::Error(ClipboardError::Busy)
 }

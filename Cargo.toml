@@ -20,6 +20,7 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 muda = "0.21.2"
 raw-window-handle = "0.6.2"
 rfd = "0.17.2"
+sys-locale = "0.3.2"
 tray-icon = "0.26.1"
 unicode-normalization = "0.1.25"
 

@@ -2,6 +2,7 @@
 
 pub mod content;
 pub mod convert;
+pub mod i18n;
 pub mod settings;
 pub mod text;
 pub mod theme;

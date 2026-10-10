@@ -14,6 +14,7 @@
 - テキストの変換: 改行コード、全角⇔半角、Unicode 正規化などを行い、クリップボードに入れ直す
 - 透明度、背景画像、フォント(書体とサイズ)の指定
 - タスクトレイ / メニューバーに常駐
+- 表示言語は、日本語と English から選べます(標準は、OS の言語に従う)
 
 > **macOS 版について**: Apple M2 の Mac で動作を確認しています。Intel の Mac や、ほかの macOS のバージョンでは未確認です。
 > 不具合があれば Issue で教えてください。
@@ -99,6 +100,8 @@ cargo run --release
 - **透明度**: 100% 〜 50%(標準は 96%)。背景だけが透け、文字は透けません
 - **背景画像**: 画像を選択 / 解除(画像ファイルをウィンドウにドロップしても設定できます)
 - **フォント**: 書体とサイズを選ぶ / 既定に戻す(標準は Windows: Yu Gothic UI、macOS: Hiragino Sans、15px)
+- **言語 / Language**: 自動(OS の言語に従う。日本語以外の OS は English)/ 日本語 / English。選ぶとすぐに切り替わります。
+  この項目の名前だけは、迷子にならないよう、常に二か国語で書いています
 - **終了**: アプリを終了する
 
 ### テキストの表示形式
@@ -165,12 +168,13 @@ height=220.0
 opacity=96
 theme=yellow
 view=normal
+language=auto
 background=C:\Users\me\Pictures\wallpaper.png
 font=Meiryo
 font_size=16
 ```
 
-`theme` は `yellow` / `light` / `dark`、`view` は `normal` / `controls` / `codes` です。
+`theme` は `yellow` / `light` / `dark`、`view` は `normal` / `controls` / `codes`、`language` は `auto` / `ja` / `en` です。
 `background`、`font`、`font_size` は省略できます。ファイルを消すと初期状態に戻ります。
 
 ## 仕組み
@@ -189,6 +193,7 @@ src/
     text.rs        制御文字の表示、文字コード一覧、文字数などの表示用の加工
     convert.rs     テキストの変換(改行コード、全角・半角、正規化など。unicode-normalization)
     settings.rs    設定の読み書き
+    i18n.rs        表示言語の切り替え(日本語 / English)。文字列は、使う場所に日本語と英語を並べて書く(`tr(...)`)
     theme.rs       配色
   platform/
     windows.rs   フォーカスを奪わないスタイル、表示/非表示、枠線、メニューの表示

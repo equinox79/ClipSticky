@@ -1,7 +1,9 @@
 //! テキストの表示用加工(制御文字の可視化、文字コード一覧、文字数など)
 
 use super::content::Content;
+use super::i18n::{Lang, lang, tr};
 use super::settings::View;
+use crate::tr_fmt;
 
 /// 表示するテキストの上限(これを超える分は省略する。描画が重くなるため)
 pub const MAX_DISPLAY_CHARS: usize = 20_000;
@@ -191,32 +193,50 @@ pub fn display_pieces(text: &str, view: View) -> Vec<Piece> {
         vec![Piece { text: expand_tabs(&normalize_newlines(&body), TAB_WIDTH), marker: false }]
     };
     if truncated {
-        push_piece(&mut pieces, &format!("\n…(以降 {} 文字は省略)", total - MAX_DISPLAY_CHARS), true);
+        push_piece(&mut pieces, &omitted_note(total - MAX_DISPLAY_CHARS), true);
     }
     pieces
 }
 
+/// 上限を超えて省略した分の知らせ(先頭に改行つき)
+pub fn omitted_note(omitted: usize) -> String {
+    tr_fmt!("\n…(以降 {omitted} 文字は省略)", "\n… ({omitted} more characters omitted)")
+}
+
 pub fn type_label(content: &Content) -> &'static str {
     match content {
-        Content::Text(_) => "テキスト",
-        Content::Image(_) => "画像",
-        Content::Files(_) => "ファイル",
-        Content::Unknown => "クリップボード",
-        Content::Error(_) => "エラー",
+        Content::Text(_) => tr("テキスト", "Text"),
+        Content::Image(_) => tr("画像", "Image"),
+        Content::Files(_) => tr("ファイル", "Files"),
+        Content::Unknown => tr("クリップボード", "Clipboard"),
+        Content::Error(_) => tr("エラー", "Error"),
     }
+}
+
+/// 英語の複数形(1 のときだけ単数)
+fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str {
+    if n == 1 { one } else { many }
 }
 
 /// フッターに出す、内容の詳細(文字数・画像サイズ・ファイル件数)
 pub fn detail(content: &Content) -> String {
     match content {
-        Content::Text(t) => format!(
-            "{} 文字 · {} 行 · UTF-8 {}B",
-            t.chars().count(),
-            t.lines().count(),
-            t.len()
-        ),
+        Content::Text(t) => {
+            let (chars, lines, bytes) = (t.chars().count(), t.lines().count(), t.len());
+            match lang() {
+                Lang::Ja => format!("{chars} 文字 · {lines} 行 · UTF-8 {bytes}B"),
+                Lang::En => format!(
+                    "{chars} {} · {lines} {} · UTF-8 {bytes}B",
+                    plural(chars, "char", "chars"),
+                    plural(lines, "line", "lines")
+                ),
+            }
+        }
         Content::Image(d) => format!("{}×{}", d.width, d.height),
-        Content::Files(f) => format!("{} 件", f.len()),
+        Content::Files(f) => match lang() {
+            Lang::Ja => format!("{} 件", f.len()),
+            Lang::En => format!("{} {}", f.len(), plural(f.len(), "file", "files")),
+        },
         Content::Unknown | Content::Error(_) => String::new(),
     }
 }
@@ -322,6 +342,19 @@ mod tests {
         let text = "x".repeat(MAX_DISPLAY_CHARS + 3);
         let pieces = display_pieces(&text, View::Normal);
         assert!(pieces.last().unwrap().text.ends_with("(以降 3 文字は省略)"));
+    }
+
+    #[test]
+    fn detail_in_english_uses_singular_and_plural() {
+        use crate::core::i18n::set_lang;
+        set_lang(Lang::En);
+        assert_eq!(detail(&Content::Text("a".into())), "1 char · 1 line · UTF-8 1B");
+        assert_eq!(detail(&Content::Text("ab
+cd".into())), "5 chars · 2 lines · UTF-8 5B");
+        assert_eq!(detail(&Content::Files(vec!["x".into()])), "1 file");
+        assert_eq!(detail(&Content::Files(vec!["x".into(), "y".into()])), "2 files");
+        assert_eq!(omitted_note(3), "\n… (3 more characters omitted)");
+        set_lang(Lang::Ja);
     }
 
     #[test]

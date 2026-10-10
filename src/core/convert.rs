@@ -6,6 +6,8 @@ use std::sync::OnceLock;
 
 use unicode_normalization::UnicodeNormalization;
 
+use super::i18n::tr;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Conversion {
     NewlineLf,
@@ -29,65 +31,127 @@ pub struct ConversionInfo {
     pub conversion: Conversion,
     /// メニューの項目 ID に使う名前
     pub id: &'static str,
-    pub label: &'static str,
+    label_ja: &'static str,
+    label_en: &'static str,
 }
 
-const fn info(conversion: Conversion, id: &'static str, label: &'static str) -> ConversionInfo {
-    ConversionInfo { conversion, id, label }
+impl ConversionInfo {
+    /// メニューに出す名前(現在の言語)
+    pub fn label(&self) -> &'static str {
+        tr(self.label_ja, self.label_en)
+    }
 }
 
-/// メニューに並べる順(グループ名, 項目)
-pub const CONVERSION_GROUPS: [(&str, &[ConversionInfo]); 5] = [
-    (
-        "改行コード",
-        &[
-            info(Conversion::NewlineLf, "newline-lf", "LF にそろえる(Linux・macOS)"),
-            info(Conversion::NewlineCrlf, "newline-crlf", "CRLF にそろえる(Windows)"),
-            info(Conversion::NewlineCr, "newline-cr", "CR にそろえる(古い Mac)"),
+const fn info(
+    conversion: Conversion,
+    id: &'static str,
+    label_ja: &'static str,
+    label_en: &'static str,
+) -> ConversionInfo {
+    ConversionInfo { conversion, id, label_ja, label_en }
+}
+
+/// メニューのサブメニュー 1 つ分
+pub struct ConversionGroup {
+    name_ja: &'static str,
+    name_en: &'static str,
+    pub items: &'static [ConversionInfo],
+}
+
+impl ConversionGroup {
+    /// サブメニューの名前(現在の言語)
+    pub fn name(&self) -> &'static str {
+        tr(self.name_ja, self.name_en)
+    }
+}
+
+/// メニューに並べる順
+pub const CONVERSION_GROUPS: [ConversionGroup; 5] = [
+    ConversionGroup {
+        name_ja: "改行コード",
+        name_en: "Line endings",
+        items: &[
+            info(Conversion::NewlineLf, "newline-lf", "LF にそろえる(Linux・macOS)", "Convert to LF (Linux / macOS)"),
+            info(Conversion::NewlineCrlf, "newline-crlf", "CRLF にそろえる(Windows)", "Convert to CRLF (Windows)"),
+            info(Conversion::NewlineCr, "newline-cr", "CR にそろえる(古い Mac)", "Convert to CR (classic Mac)"),
         ],
-    ),
-    (
-        "空白・改行の削除",
-        &[
-            info(Conversion::TrimEndNewlines, "trim-end-newlines", "末尾の改行を削除"),
-            info(Conversion::TrimBoth, "trim-both", "前後の空白・改行を削除"),
-            info(Conversion::TrimLineEnds, "trim-line-ends", "行末の空白を削除"),
+    },
+    ConversionGroup {
+        name_ja: "空白・改行の削除",
+        name_en: "Trim whitespace",
+        items: &[
+            info(Conversion::TrimEndNewlines, "trim-end-newlines", "末尾の改行を削除", "Remove trailing newlines"),
+            info(
+                Conversion::TrimBoth,
+                "trim-both",
+                "前後の空白・改行を削除",
+                "Trim leading and trailing whitespace",
+            ),
+            info(
+                Conversion::TrimLineEnds,
+                "trim-line-ends",
+                "行末の空白を削除",
+                "Remove trailing spaces on each line",
+            ),
         ],
-    ),
-    (
-        "全角・半角",
-        &[
-            info(Conversion::ToHalfWidthAscii, "to-half-ascii", "全角の英数・記号を半角に"),
-            info(Conversion::ToFullWidthAscii, "to-full-ascii", "半角の英数・記号を全角に"),
-            info(Conversion::KanaToFull, "kana-to-full", "半角カナを全角カナに"),
-            info(Conversion::KanaToHalf, "kana-to-half", "全角カナを半角カナに"),
+    },
+    ConversionGroup {
+        name_ja: "全角・半角",
+        name_en: "Full-width / half-width",
+        items: &[
+            info(
+                Conversion::ToHalfWidthAscii,
+                "to-half-ascii",
+                "全角の英数・記号を半角に",
+                "Full-width alphanumerics and symbols → half-width",
+            ),
+            info(
+                Conversion::ToFullWidthAscii,
+                "to-full-ascii",
+                "半角の英数・記号を全角に",
+                "Half-width alphanumerics and symbols → full-width",
+            ),
+            info(Conversion::KanaToFull, "kana-to-full", "半角カナを全角カナに", "Half-width katakana → full-width"),
+            info(Conversion::KanaToHalf, "kana-to-half", "全角カナを半角カナに", "Full-width katakana → half-width"),
         ],
-    ),
-    (
-        "Unicode 正規化",
-        &[
-            info(Conversion::Nfc, "nfc", "NFC(合成。macOS のファイル名の濁点を直す)"),
-            info(Conversion::Nfd, "nfd", "NFD(分解)"),
-            info(Conversion::Nfkc, "nfkc", "NFKC(互換文字を通常の文字に。㈱ → (株)、① → 1)"),
+    },
+    ConversionGroup {
+        name_ja: "Unicode 正規化",
+        name_en: "Unicode normalization",
+        items: &[
+            info(
+                Conversion::Nfc,
+                "nfc",
+                "NFC(合成。macOS のファイル名の濁点を直す)",
+                "NFC (composed; fixes decomposed text such as macOS file names)",
+            ),
+            info(Conversion::Nfd, "nfd", "NFD(分解)", "NFD (decomposed)"),
+            info(
+                Conversion::Nfkc,
+                "nfkc",
+                "NFKC(互換文字を通常の文字に。㈱ → (株)、① → 1)",
+                "NFKC (compatibility characters → plain, e.g. ㈱ → (株), ① → 1)",
+            ),
         ],
-    ),
-    (
-        "大文字・小文字",
-        &[
-            info(Conversion::Lower, "lower", "小文字にする"),
-            info(Conversion::Upper, "upper", "大文字にする"),
+    },
+    ConversionGroup {
+        name_ja: "大文字・小文字",
+        name_en: "Case",
+        items: &[
+            info(Conversion::Lower, "lower", "小文字にする", "Lowercase"),
+            info(Conversion::Upper, "upper", "大文字にする", "Uppercase"),
         ],
-    ),
+    },
 ];
 
 pub fn conversion_by_id(id: &str) -> Option<&'static ConversionInfo> {
-    CONVERSION_GROUPS.iter().flat_map(|(_, items)| items.iter()).find(|i| i.id == id)
+    CONVERSION_GROUPS.iter().flat_map(|g| g.items.iter()).find(|i| i.id == id)
 }
 
 pub fn conversion_info(c: Conversion) -> &'static ConversionInfo {
     CONVERSION_GROUPS
         .iter()
-        .flat_map(|(_, items)| items.iter())
+        .flat_map(|g| g.items.iter())
         .find(|i| i.conversion == c)
         .expect("every conversion is listed")
 }
@@ -280,8 +344,8 @@ mod tests {
     #[test]
     fn ids_are_unique_and_resolvable() {
         let mut seen = std::collections::HashSet::new();
-        for (_, items) in CONVERSION_GROUPS {
-            for i in items {
+        for group in CONVERSION_GROUPS {
+            for i in group.items {
                 assert!(seen.insert(i.id), "duplicate id {}", i.id);
                 assert_eq!(conversion_by_id(i.id).unwrap().conversion, i.conversion);
                 assert_eq!(conversion_info(i.conversion).id, i.id);

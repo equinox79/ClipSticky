@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use super::i18n::{LANGUAGES, Language, tr};
+
 pub const DEFAULT_OPACITY: u32 = 96;
 pub const OPACITY_CHOICES: [u32; 7] = [100, 96, 90, 80, 70, 60, 50];
 pub const DEFAULT_FONT_SIZE: i32 = 15; // 本文のサイズ(論理ピクセル)
@@ -14,12 +16,17 @@ pub enum Theme {
     Dark,
 }
 
-/// (値, 設定ファイル上の名前, メニューの表示名)
-pub const THEMES: [(Theme, &str, &str); 3] = [
-    (Theme::Yellow, "yellow", "イエロー"),
-    (Theme::Light, "light", "ライト"),
-    (Theme::Dark, "dark", "ダーク"),
-];
+/// (値, 設定ファイル上の名前)
+pub const THEMES: [(Theme, &str); 3] = [(Theme::Yellow, "yellow"), (Theme::Light, "light"), (Theme::Dark, "dark")];
+
+/// メニューの表示名(現在の言語)
+pub fn theme_label(t: Theme) -> &'static str {
+    match t {
+        Theme::Yellow => tr("イエロー", "Yellow"),
+        Theme::Light => tr("ライト", "Light"),
+        Theme::Dark => tr("ダーク", "Dark"),
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum View {
@@ -28,11 +35,17 @@ pub enum View {
     Codes,
 }
 
-pub const VIEWS: [(View, &str, &str); 3] = [
-    (View::Normal, "normal", "通常"),
-    (View::Controls, "controls", "制御文字を表示"),
-    (View::Codes, "codes", "文字コード一覧"),
-];
+/// (値, 設定ファイル上の名前)
+pub const VIEWS: [(View, &str); 3] = [(View::Normal, "normal"), (View::Controls, "controls"), (View::Codes, "codes")];
+
+/// メニューの表示名(現在の言語)
+pub fn view_label(v: View) -> &'static str {
+    match v {
+        View::Normal => tr("通常", "Normal"),
+        View::Controls => tr("制御文字を表示", "Show control characters"),
+        View::Codes => tr("文字コード一覧", "Character codes"),
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
@@ -41,6 +54,8 @@ pub struct Settings {
     pub opacity: u32,
     pub theme: Theme,
     pub view: View,
+    /// 表示言語(Auto は OS の言語に従う)
+    pub language: Language,
     pub background: Option<String>,
     /// フォント名(None なら既定)
     pub font: Option<String>,
@@ -55,6 +70,7 @@ impl Default for Settings {
             opacity: DEFAULT_OPACITY,
             theme: Theme::Yellow,
             view: View::Normal,
+            language: Language::Auto,
             background: None,
             font: None,
             font_size: DEFAULT_FONT_SIZE,
@@ -81,13 +97,18 @@ impl Settings {
                     }
                 }
                 "theme" => {
-                    if let Some(&(t, _, _)) = THEMES.iter().find(|(_, id, _)| *id == value) {
+                    if let Some(&(t, _)) = THEMES.iter().find(|(_, id)| *id == value) {
                         s.theme = t;
                     }
                 }
                 "view" => {
-                    if let Some(&(v, _, _)) = VIEWS.iter().find(|(_, id, _)| *id == value) {
+                    if let Some(&(v, _)) = VIEWS.iter().find(|(_, id)| *id == value) {
                         s.view = v;
+                    }
+                }
+                "language" => {
+                    if let Some(&(l, _)) = LANGUAGES.iter().find(|(_, id)| *id == value) {
+                        s.language = l;
                     }
                 }
                 "background" if !value.is_empty() => s.background = Some(value.to_string()),
@@ -113,9 +134,10 @@ impl Settings {
         if let Some((w, h)) = self.size {
             out.push_str(&format!("width={w:.1}\nheight={h:.1}\n"));
         }
-        let theme = THEMES.iter().find(|(t, _, _)| *t == self.theme).map_or("yellow", |t| t.1);
-        let view = VIEWS.iter().find(|(v, _, _)| *v == self.view).map_or("normal", |v| v.1);
-        out.push_str(&format!("opacity={}\ntheme={theme}\nview={view}\n", self.opacity));
+        let theme = THEMES.iter().find(|(t, _)| *t == self.theme).map_or("yellow", |t| t.1);
+        let view = VIEWS.iter().find(|(v, _)| *v == self.view).map_or("normal", |v| v.1);
+        let language = LANGUAGES.iter().find(|(l, _)| *l == self.language).map_or("auto", |l| l.1);
+        out.push_str(&format!("opacity={}\ntheme={theme}\nview={view}\nlanguage={language}\n", self.opacity));
         if let Some(bg) = &self.background {
             out.push_str(&format!("background={bg}\n"));
         }
@@ -166,6 +188,7 @@ mod tests {
             opacity: 70,
             theme: Theme::Dark,
             view: View::Codes,
+            language: Language::En,
             background: Some(r"C:\a b\c,d.png".into()),
             font: Some("Meiryo".into()),
             font_size: 18,

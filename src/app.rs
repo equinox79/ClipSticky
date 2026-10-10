@@ -16,15 +16,17 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIc
 
 use crate::clipboard;
 use crate::core::content::{Content, ImageContent};
+use crate::core::i18n::{self, Language, tr};
 use crate::core::convert::{Conversion, conversion_info, convert};
 use crate::core::settings::{
     DEFAULT_FONT_SIZE, DEFAULT_SIZE, FONT_SIZE_RANGE, Settings, Theme, View,
 };
-use crate::core::text::{Piece, code_rows, detail, display_pieces, type_label};
+use crate::core::text::{Piece, code_rows, detail, display_pieces, omitted_note, type_label};
 use crate::core::theme::{Palette, blend, palette};
 use crate::fonts::{DEFAULT_FONT, FontBook};
 use crate::menu::{AppMenu, Command, tray_icon_rgba};
 use crate::platform;
+use crate::tr_fmt;
 
 const PAD: f32 = 16.0;
 const HEADER_TOP: f32 = 12.0;
@@ -84,6 +86,8 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, mut settings: Settings) -> App {
+        // 表示言語(メインスレッドで設定する。メニューや画面の文字列は、これを見て選ぶ)
+        i18n::set_lang(i18n::resolve(settings.language));
         let ctx = cc.egui_ctx.clone();
         let mut fonts = FontBook::new();
         ctx.set_fonts(fonts.definitions(settings.font.as_deref()));
@@ -164,6 +168,17 @@ impl App {
         self.menu.sync(&self.settings, self.is_monitoring(), self.is_text());
     }
 
+    /// 表示言語を切り替える。メニューの文言は作り直す(トレイのメニューも差し替える)
+    fn set_language(&mut self, ctx: &egui::Context, language: Language) {
+        self.settings.language = language;
+        i18n::set_lang(i18n::resolve(language));
+        self.menu = AppMenu::new(&self.settings, self.is_monitoring());
+        if let Some(tray) = &self.tray {
+            tray.set_menu(Some(Box::new(self.menu.menu.clone())));
+        }
+        self.commit(ctx);
+    }
+
     /// 設定を保存し、メニューと画面に反映する
     fn commit(&mut self, ctx: &egui::Context) {
         self.sync_menu();
@@ -189,23 +204,24 @@ impl App {
         let result = arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text));
         match result {
             Ok(()) => self.notify(ctx, done),
-            Err(e) => self.notify(ctx, format!("コピーできませんでした: {e}")),
+            Err(e) => self.notify(ctx, tr_fmt!("コピーできませんでした: {e}", "Could not copy: {e}")),
         }
     }
 
     /// テキストを変換して、クリップボードに入れ直す
     fn convert_and_copy(&mut self, ctx: &egui::Context, conversion: Conversion) {
         let Content::Text(text) = &self.content else {
-            self.notify(ctx, "テキストのときだけ変換できます");
+            self.notify(ctx, tr("テキストのときだけ変換できます", "Only text can be converted"));
             return;
         };
         let converted = convert(text, conversion);
         if converted == *text {
-            self.notify(ctx, "変化はありませんでした");
+            self.notify(ctx, tr("変化はありませんでした", "No change"));
             return;
         }
-        let label = conversion_info(conversion).label;
-        self.copy_text(ctx, converted, &format!("「{label}」を実行して、クリップボードに入れました"));
+        let label = conversion_info(conversion).label();
+        let done = tr_fmt!("「{label}」を実行して、クリップボードに入れました", "Ran \"{label}\" and put the result on the clipboard");
+        self.copy_text(ctx, converted, &done);
     }
 
     fn apply_font(&mut self, ctx: &egui::Context) {
@@ -222,7 +238,10 @@ impl App {
                 None => {
                     rfd::MessageDialog::new()
                         .set_title("ClipSticky")
-                        .set_description("画像を読み込めませんでした。\n対応形式: PNG / JPEG / BMP / GIF / WebP")
+                        .set_description(tr(
+                            "画像を読み込めませんでした。\n対応形式: PNG / JPEG / BMP / GIF / WebP",
+                            "Could not load the image.\nSupported formats: PNG / JPEG / BMP / GIF / WebP",
+                        ))
                         .set_level(rfd::MessageLevel::Warning)
                         .show();
                     return;
@@ -252,6 +271,7 @@ impl App {
                 self.commit(ctx);
             }
             Command::Convert(conversion) => self.convert_and_copy(ctx, conversion),
+            Command::Language(language) => self.set_language(ctx, language),
             Command::Theme(t) => {
                 self.settings.theme = t;
                 apply_visuals(ctx, t);
@@ -264,7 +284,7 @@ impl App {
             Command::BackgroundSelect => {
                 let picked = rfd::FileDialog::new()
                     .set_parent(frame)
-                    .add_filter("画像ファイル", &["png", "jpg", "jpeg", "bmp", "gif", "webp"])
+                    .add_filter(tr("画像ファイル", "Image files"), &["png", "jpg", "jpeg", "bmp", "gif", "webp"])
                     .pick_file();
                 if let Some(path) = picked {
                     self.set_background(ctx, Some(path.display().to_string()));
@@ -493,7 +513,7 @@ impl App {
                             painter.text(
                                 rect.left_center(),
                                 Align2::LEFT_CENTER,
-                                format!("…(以降 {omitted} 文字は省略)"),
+                                omitted_note(omitted).trim_start().to_string(),
                                 body.clone(),
                                 pal.muted,
                             );
@@ -506,8 +526,13 @@ impl App {
                 let pieces = match &self.content {
                     Content::Text(t) => display_pieces(t, self.settings.view),
                     Content::Files(f) => vec![Piece { text: f.join("\n"), marker: false }],
-                    Content::Error(e) => vec![Piece { text: format!("取得エラー: {e}"), marker: false }],
-                    _ => vec![Piece { text: "未知の形式(または空)です。".to_string(), marker: true }],
+                    Content::Error(e) => {
+                        vec![Piece { text: tr_fmt!("取得エラー: {}", "Error: {}", e.message()), marker: false }]
+                    }
+                    _ => vec![Piece {
+                        text: tr("未知の形式(または空)です。", "Unknown format (or empty).").to_string(),
+                        marker: true,
+                    }],
                 };
                 let mut job = LayoutJob::default();
                 job.wrap.max_width = area.width();
@@ -538,9 +563,9 @@ impl App {
 
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                ui.label("絞り込み");
+                ui.label(tr("絞り込み", "Filter"));
                 ui.add(egui::TextEdit::singleline(&mut picker.filter).desired_width(150.0));
-                ui.label("サイズ");
+                ui.label(tr("サイズ", "Size"));
                 ui.add(
                     egui::DragValue::new(&mut size)
                         .range(FONT_SIZE_RANGE.0..=FONT_SIZE_RANGE.1)
@@ -571,7 +596,7 @@ impl App {
                 if ui.button("OK").clicked() {
                     action = Action::Ok;
                 }
-                if ui.button("キャンセル").clicked() {
+                if ui.button(tr("キャンセル", "Cancel")).clicked() {
                     action = Action::Cancel;
                 }
             });
@@ -680,11 +705,11 @@ impl eframe::App for App {
         let name_color = blend(pal.muted, pal.bg, 55);
         let name_rect = painter.text(header.left_center(), Align2::LEFT_CENTER, "ClipSticky", small.clone(), name_color);
         let label = if self.font_picker.is_some() {
-            "フォント"
+            tr("フォント", "Font")
         } else {
             match (&self.content, self.settings.view) {
-                (Content::Text(_), View::Controls) => "テキスト · 制御文字",
-                (Content::Text(_), View::Codes) => "テキスト · 文字コード",
+                (Content::Text(_), View::Controls) => tr("テキスト · 制御文字", "Text · control characters"),
+                (Content::Text(_), View::Codes) => tr("テキスト · 文字コード", "Text · character codes"),
                 (c, _) => type_label(c),
             }
         };
@@ -716,7 +741,7 @@ impl eframe::App for App {
         let dot = if monitoring { Color32::from_rgb(0x34, 0xC7, 0x59) } else { Color32::from_rgb(0xFF, 0x9F, 0x0A) };
         let painter = ui.painter();
         painter.circle_filled(pos2(footer.left() + 4.0, footer.center().y), 4.0, dot);
-        let status = if monitoring { "監視中" } else { "一時停止中" };
+        let status = if monitoring { tr("監視中", "Monitoring") } else { tr("一時停止中", "Paused") };
         // 通知があるうちは、状態の代わりに通知を出す
         let notice = self.notice.as_ref().filter(|(_, since)| since.elapsed() < NOTICE_DURATION).map(|(m, _)| m.clone());
         let (info, info_color) = match notice {
