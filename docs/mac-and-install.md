@@ -160,8 +160,8 @@ CI(GitHub Actions の macOS ランナー)でビルドが通ることまでは確
   将来、利用者が増えたら公証のために登録を再検討する。
 ## 5. おすすめの順序
 
-1. ~~ライセンスを決める~~(MIT に決定。LICENSE を追加済み)
-2. ~~Windows 版を GitHub Releases の zip で配る~~(.github/workflows/release.yml を追加済み。0.1.0 のようなタグを push すると zip が公開される)
+1. ~~ライセンスを決める~~(MIT に決定。`LICENSE` を追加済み)
+2. ~~Windows 版を GitHub Releases の zip で配る~~(`.github/workflows/release.yml` を追加済み。`v0.1.0` のようなタグを push すると zip が公開される)
 3. 「ログイン時に起動」、アイコン、版数表示を追加し、winget に提出する
 4. `core/` を切り出し、Mac 版をプロトタイプする(Mac 実機で確認)
 5. Mac の署名・公証・`.dmg`・Homebrew Cask
