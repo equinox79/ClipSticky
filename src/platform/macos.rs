@@ -56,6 +56,9 @@ pub fn prepare_window(frame: &eframe::Frame) {
 /// Windows のようにスタイルが書き換えられることはないので、何もしない
 pub fn ensure_style() {}
 
+/// Windows の枠線対策。macOS では不要
+pub fn clip_to_client() {}
+
 /// 前面に出す。アプリをアクティブにしない(`orderFrontRegardless`)ので、他のアプリのフォーカスは奪わない想定
 pub fn show() {
     WINDOW.with(|w| {

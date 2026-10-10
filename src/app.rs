@@ -566,6 +566,7 @@ impl eframe::App for App {
             self.first_frame(&ctx, frame);
         }
         platform::ensure_style();
+        platform::clip_to_client();
         self.track_geometry(&ctx);
 
         let pal = palette(self.settings.theme);

@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Graphics::Gdi::{ClientToScreen, CreateRectRgn, SetWindowRgn};
 use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
 use windows::Win32::System::DataExchange::GetClipboardSequenceNumber;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -70,6 +71,37 @@ fn stored_hwnd() -> Option<HWND> {
     match HWND_VALUE.load(Ordering::Relaxed) {
         0 => None,
         v => Some(HWND(v as *mut _)),
+    }
+}
+
+thread_local! {
+    /// 最後に SetWindowRgn したときのウィンドウサイズ
+    static CLIPPED_SIZE: std::cell::Cell<(i32, i32)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// 描画範囲をクライアント領域に切り詰める。
+/// 透明な枠なしウィンドウでも、非クライアント領域の最外周 1px を DWM が不透明な線として描くため、
+/// そのままだと角丸の外側(四隅)に線が残る。サイズが変わったときだけ設定し直す
+pub fn clip_to_client() {
+    let Some(hwnd) = stored_hwnd() else { return };
+    unsafe {
+        let mut window = RECT::default();
+        let mut client = RECT::default();
+        if GetWindowRect(hwnd, &mut window).is_err() || GetClientRect(hwnd, &mut client).is_err() {
+            return;
+        }
+        let size = (window.right - window.left, window.bottom - window.top);
+        if CLIPPED_SIZE.get() == size {
+            return;
+        }
+        // クライアント領域の左上を、ウィンドウ左上を原点とした座標に直す
+        let mut origin = POINT { x: 0, y: 0 };
+        let _ = ClientToScreen(hwnd, &mut origin);
+        let (x, y) = (origin.x - window.left, origin.y - window.top);
+        let rgn = CreateRectRgn(x, y, x + client.right, y + client.bottom);
+        if SetWindowRgn(hwnd, Some(rgn), true) != 0 {
+            CLIPPED_SIZE.set(size);
+        }
     }
 }
 
