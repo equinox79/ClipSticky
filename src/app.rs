@@ -17,7 +17,10 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIc
 use crate::clipboard;
 use crate::core::content::{Content, ImageContent};
 use crate::core::convert::{Conversion, conversion_info, convert};
-use crate::core::encoding::{Candidate, EncodingReport, encode_reports, hex, mojibake_candidates};
+use crate::core::encoding::{
+    ByteFormat, Candidate, TargetEncoding, encode_text, encoding_label, format_bytes, format_label, mojibake_candidates,
+    unmappable_summary,
+};
 use crate::core::settings::{
     DEFAULT_FONT_SIZE, DEFAULT_SIZE, FONT_SIZE_RANGE, Settings, Theme, View,
 };
@@ -58,8 +61,6 @@ struct FontPicker {
 
 /// 画面の下に出す通知(コピーしました、など)を出しておく時間
 const NOTICE_DURATION: Duration = Duration::from_secs(3);
-/// エンコード別の表示で、16 進を出すバイト数の上限(長いテキストでは先頭だけ)
-const HEX_PREVIEW_BYTES: usize = 32;
 /// 文字化けの候補で、結果を出す文字数の上限
 const CANDIDATE_PREVIEW_CHARS: usize = 120;
 
@@ -68,7 +69,6 @@ pub struct App {
     content: Content,
     /// 内容が変わるたびに増える番号(エンコード別・文字化けの結果のキャッシュ用)
     content_serial: u64,
-    encoding_cache: Option<(u64, Vec<EncodingReport>)>,
     mojibake_cache: Option<(u64, Vec<Candidate>)>,
     /// 画面の下に出す通知と、出し始めた時刻
     notice: Option<(String, Instant)>,
@@ -143,7 +143,6 @@ impl App {
             settings,
             content: Content::Unknown,
             content_serial: 0,
-            encoding_cache: None,
             mojibake_cache: None,
             notice: None,
             clipboard_rx,
@@ -206,6 +205,28 @@ impl App {
         }
     }
 
+    /// テキストを、別の文字エンコードのバイト列にして、文字列(16 進・Base64・%XX)でクリップボードに入れる。
+    /// その文字エンコードに無い文字があるときは、変換せずに、その文字を知らせる
+    fn encode_and_copy(&mut self, ctx: &egui::Context, encoding: TargetEncoding, format: ByteFormat) {
+        let Content::Text(text) = &self.content else {
+            self.notify(ctx, "テキストのときだけ変換できます");
+            return;
+        };
+        let enc = encoding_label(encoding);
+        // 書式の名前から、例の部分(「16 進(E3 81 82)」の括弧以降)を除く
+        let fmt = format_label(format).split('(').next().unwrap_or_default();
+        match encode_text(text, encoding) {
+            Ok(bytes) => {
+                let converted = format_bytes(&bytes, format);
+                let done = format!("{enc} のバイト列({} バイト)を {fmt} でコピーしました", bytes.len());
+                self.copy_text(ctx, converted, &done);
+            }
+            Err(chars) => {
+                self.notify(ctx, format!("{enc} に無い文字があるため、変換できません: {}", unmappable_summary(&chars)));
+            }
+        }
+    }
+
     /// テキストを変換して、クリップボードに入れ直す
     fn convert_and_copy(&mut self, ctx: &egui::Context, conversion: Conversion) {
         let Content::Text(text) = &self.content else {
@@ -265,6 +286,7 @@ impl App {
                 self.commit(ctx);
             }
             Command::Convert(conversion) => self.convert_and_copy(ctx, conversion),
+            Command::EncodeCopy(encoding, format) => self.encode_and_copy(ctx, encoding, format),
             Command::Theme(t) => {
                 self.settings.theme = t;
                 apply_visuals(ctx, t);
@@ -458,13 +480,9 @@ impl App {
         let reset = std::mem::take(&mut self.scroll_reset);
         let text_color = pal.text;
 
-        // エンコード別・文字化けは、専用の画面(テキストのときだけ)
-        if self.is_text() {
-            match self.settings.view {
-                View::Encodings => return self.ui_encodings(ui, area, pal, reset),
-                View::Mojibake => return self.ui_mojibake(ui, area, pal, reset),
-                _ => {}
-            }
+        // 文字化けを直す画面は、専用の画面(テキストのときだけ)
+        if self.is_text() && self.settings.view == View::Mojibake {
+            return self.ui_mojibake(ui, area, pal, reset);
         }
 
         let scroll = |reset: bool| {
@@ -542,56 +560,6 @@ impl App {
                     ui.add(Label::new(job).wrap().selectable(false));
                 });
             }
-        }
-    }
-
-    /// エンコード別: UTF-8 / UTF-16 / Shift_JIS / EUC-JP / ISO-2022-JP で書き出したバイト列。
-    /// 行をクリックすると、そのバイト列(16 進)をコピーする
-    fn ui_encodings(&mut self, ui: &mut egui::Ui, area: Rect, pal: &Palette, reset: bool) {
-        let Content::Text(text) = &self.content else { return };
-        if self.encoding_cache.as_ref().map(|c| c.0) != Some(self.content_serial) {
-            self.encoding_cache = Some((self.content_serial, encode_reports(text)));
-        }
-        let reports = &self.encoding_cache.as_ref().expect("just filled").1;
-        let px = self.settings.font_size as f32;
-        let warn = warn_color(self.settings.theme);
-        let small = |color| TextFormat::simple(FontId::proportional(px - 2.0), color);
-        let mut clicked: Option<(String, String)> = None;
-
-        content_scroll("encodings", reset).show(ui, |ui| {
-            ui.set_width(area.width());
-            for r in reports {
-                let mut job = LayoutJob::default();
-                job.wrap.max_width = area.width();
-                job.append(r.label, 0.0, TextFormat::simple(FontId::proportional(px), pal.text));
-                job.append(&format!("   {} バイト", r.bytes.len()), 0.0, small(pal.muted));
-                if !r.unmappable.is_empty() {
-                    job.append("   変換できない文字あり", 0.0, small(warn));
-                }
-                let shown = &r.bytes[..r.bytes.len().min(HEX_PREVIEW_BYTES)];
-                let more = if r.bytes.len() > HEX_PREVIEW_BYTES { " …" } else { "" };
-                job.append(
-                    &format!("\n{}{more}", hex(shown)),
-                    0.0,
-                    TextFormat::simple(FontId::monospace(px - 3.0), pal.muted),
-                );
-                if !r.unmappable.is_empty() {
-                    let list: Vec<String> = r.unmappable.iter().map(|c| c.to_string()).collect();
-                    let more = if r.unmappable_truncated { " …" } else { "" };
-                    job.append(&format!("\n変換できない文字: {}{more}", list.join(" ")), 0.0, small(warn));
-                }
-                let response = ui
-                    .add(Label::new(job).wrap().sense(Sense::click()))
-                    .on_hover_text("クリックで、このバイト列(16 進)をコピー")
-                    .on_hover_cursor(CursorIcon::PointingHand);
-                if response.clicked() {
-                    clicked = Some((hex(&r.bytes), format!("{} のバイト列(16 進)をクリップボードに入れました", r.label)));
-                }
-                ui.add_space(6.0);
-            }
-        });
-        if let Some((text, done)) = clicked {
-            self.copy_text(&ui.ctx().clone(), text, &done);
         }
     }
 
@@ -806,7 +774,6 @@ impl eframe::App for App {
             match (&self.content, self.settings.view) {
                 (Content::Text(_), View::Controls) => "テキスト · 制御文字",
                 (Content::Text(_), View::Codes) => "テキスト · 文字コード",
-                (Content::Text(_), View::Encodings) => "テキスト · エンコード別",
                 (Content::Text(_), View::Mojibake) => "テキスト · 文字化け",
                 (c, _) => type_label(c),
             }
@@ -901,11 +868,6 @@ fn content_scroll(id: &str, reset: bool) -> ScrollArea {
         scroll = scroll.vertical_scroll_offset(0.0);
     }
     scroll
-}
-
-/// 警告の色(変換できない文字など)
-fn warn_color(theme: Theme) -> Color32 {
-    if theme == Theme::Dark { Color32::from_rgb(0xFF, 0x9F, 0x0A) } else { Color32::from_rgb(0xB4, 0x50, 0x00) }
 }
 
 /// `job` に文字列を足す。日本語フォントはバックスラッシュ(U+005C)を円記号(¥)の字形で描くため、

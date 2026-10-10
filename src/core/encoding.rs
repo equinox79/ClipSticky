@@ -1,25 +1,64 @@
-//! 文字コードの変換(エンコード別のバイト列、文字化けの復元)
+//! 文字エンコードの変換(テキストを別の文字コードのバイト列にする、文字化けの復元)
 
 use encoding_rs::{EUC_JP, Encoding, ISO_2022_JP, SHIFT_JIS, UTF_8, WINDOWS_1252};
 
-/// 調べるテキストの上限(文字数)
-pub const MAX_CHARS: usize = 20_000;
-/// 「変換できない文字」として並べる数の上限
-const MAX_UNMAPPABLE_LISTED: usize = 16;
 /// 文字化けの復元に使うテキストの上限(文字数)
 const MAX_MOJIBAKE_CHARS: usize = 4_000;
 /// 文字化けの候補の最大数
 const MAX_CANDIDATES: usize = 5;
+/// 「変換できない文字」として知らせる文字の数の上限
+const MAX_UNMAPPABLE_LISTED: usize = 8;
 
-/// 1 つの文字コードで書き出した結果
-#[derive(Debug, PartialEq)]
-pub struct EncodingReport {
-    pub label: &'static str,
-    pub bytes: Vec<u8>,
-    /// その文字コードに無い文字(重複なし)。バイト列には含まれない
-    pub unmappable: Vec<char>,
-    /// 無い文字の種類が、`MAX_UNMAPPABLE_LISTED` を超えて省略されたか
-    pub unmappable_truncated: bool,
+/// 変換先の文字エンコード
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TargetEncoding {
+    Utf8,
+    Utf16Le,
+    Utf16Be,
+    ShiftJis,
+    EucJp,
+    Iso2022Jp,
+}
+
+/// (値, メニューの項目 ID に使う名前, 表示名)。Shift_JIS は Windows の CP932(Windows-31J)
+pub const TARGET_ENCODINGS: [(TargetEncoding, &str, &str); 6] = [
+    (TargetEncoding::Utf8, "utf8", "UTF-8"),
+    (TargetEncoding::Utf16Le, "utf16le", "UTF-16LE"),
+    (TargetEncoding::Utf16Be, "utf16be", "UTF-16BE"),
+    (TargetEncoding::ShiftJis, "sjis", "Shift_JIS (CP932)"),
+    (TargetEncoding::EucJp, "eucjp", "EUC-JP"),
+    (TargetEncoding::Iso2022Jp, "iso2022jp", "ISO-2022-JP"),
+];
+
+/// バイト列を文字列にする書式
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ByteFormat {
+    Hex,
+    Base64,
+    Percent,
+}
+
+pub const BYTE_FORMATS: [(ByteFormat, &str, &str); 3] = [
+    (ByteFormat::Hex, "hex", "16 進(E3 81 82)"),
+    (ByteFormat::Base64, "base64", "Base64(44GC)"),
+    (ByteFormat::Percent, "percent", "パーセントエンコード(%E3%81%82)"),
+];
+
+pub fn encoding_label(e: TargetEncoding) -> &'static str {
+    TARGET_ENCODINGS.iter().find(|x| x.0 == e).map_or("", |x| x.2)
+}
+
+pub fn format_label(f: ByteFormat) -> &'static str {
+    BYTE_FORMATS.iter().find(|x| x.0 == f).map_or("", |x| x.2)
+}
+
+fn legacy(e: TargetEncoding) -> Option<&'static Encoding> {
+    match e {
+        TargetEncoding::ShiftJis => Some(SHIFT_JIS),
+        TargetEncoding::EucJp => Some(EUC_JP),
+        TargetEncoding::Iso2022Jp => Some(ISO_2022_JP),
+        _ => None,
+    }
 }
 
 fn is_mappable(enc: &'static Encoding, c: char) -> bool {
@@ -28,47 +67,77 @@ fn is_mappable(enc: &'static Encoding, c: char) -> bool {
     !had_errors
 }
 
-fn encode_with(label: &'static str, enc: &'static Encoding, text: &str) -> EncodingReport {
-    let mut kept = String::with_capacity(text.len());
-    let mut unmappable = Vec::new();
-    let mut truncated = false;
-    for c in text.chars() {
-        if is_mappable(enc, c) {
-            kept.push(c);
-        } else if !unmappable.contains(&c) {
-            if unmappable.len() < MAX_UNMAPPABLE_LISTED {
-                unmappable.push(c);
-            } else {
-                truncated = true;
+/// テキストを、指定の文字エンコードのバイト列にする。
+/// その文字エンコードに無い文字があるときは、(変換せずに)その文字の一覧(重複なし)を返す
+pub fn encode_text(text: &str, encoding: TargetEncoding) -> Result<Vec<u8>, Vec<char>> {
+    match encoding {
+        TargetEncoding::Utf8 => Ok(text.as_bytes().to_vec()),
+        TargetEncoding::Utf16Le => Ok(text.encode_utf16().flat_map(u16::to_le_bytes).collect()),
+        TargetEncoding::Utf16Be => Ok(text.encode_utf16().flat_map(u16::to_be_bytes).collect()),
+        _ => {
+            let enc = legacy(encoding).expect("legacy encoding");
+            let mut unmappable: Vec<char> = Vec::new();
+            for c in text.chars() {
+                if !unmappable.contains(&c) && !is_mappable(enc, c) {
+                    unmappable.push(c);
+                    if unmappable.len() > MAX_UNMAPPABLE_LISTED {
+                        break;
+                    }
+                }
             }
+            if !unmappable.is_empty() {
+                return Err(unmappable);
+            }
+            Ok(enc.encode(text).0.into_owned())
         }
     }
-    let (bytes, _, _) = enc.encode(&kept);
-    EncodingReport { label, bytes: bytes.into_owned(), unmappable, unmappable_truncated: truncated }
-}
-
-fn utf16_bytes(text: &str, to_bytes: fn(u16) -> [u8; 2]) -> Vec<u8> {
-    text.encode_utf16().flat_map(to_bytes).collect()
-}
-
-/// UTF-8 / UTF-16 / Shift_JIS / EUC-JP / ISO-2022-JP で書き出したバイト列を作る。
-/// Shift_JIS は Windows の CP932(Windows-31J)
-pub fn encode_reports(text: &str) -> Vec<EncodingReport> {
-    let text: String = text.chars().take(MAX_CHARS).collect();
-    let plain = |label, bytes| EncodingReport { label, bytes, unmappable: Vec::new(), unmappable_truncated: false };
-    vec![
-        plain("UTF-8", text.as_bytes().to_vec()),
-        plain("UTF-16LE", utf16_bytes(&text, u16::to_le_bytes)),
-        plain("UTF-16BE", utf16_bytes(&text, u16::to_be_bytes)),
-        encode_with("Shift_JIS (CP932)", SHIFT_JIS, &text),
-        encode_with("EUC-JP", EUC_JP, &text),
-        encode_with("ISO-2022-JP", ISO_2022_JP, &text),
-    ]
 }
 
 /// バイト列を `E3 81 82` のような 16 進の文字列にする
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        out.push(TABLE[(n >> 18 & 63) as usize] as char);
+        out.push(TABLE[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6 & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+/// URL などで使う %XX の形。英数字と - . _ ~ はそのまま
+fn percent(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
+pub fn format_bytes(bytes: &[u8], format: ByteFormat) -> String {
+    match format {
+        ByteFormat::Hex => hex(bytes),
+        ByteFormat::Base64 => base64(bytes),
+        ByteFormat::Percent => percent(bytes),
+    }
+}
+
+/// 変換できなかった文字を、通知に出す形(「😀 ① …」)にする
+pub fn unmappable_summary(chars: &[char]) -> String {
+    let shown: Vec<String> = chars.iter().take(MAX_UNMAPPABLE_LISTED).map(|c| c.to_string()).collect();
+    let more = if chars.len() > MAX_UNMAPPABLE_LISTED { " …" } else { "" };
+    format!("{}{more}", shown.join(" "))
 }
 
 /// 文字化けを直した候補
@@ -167,47 +236,68 @@ pub fn mojibake_candidates(text: &str) -> Vec<Candidate> {
 mod tests {
     use super::*;
 
-    fn report<'a>(reports: &'a [EncodingReport], label: &str) -> &'a EncodingReport {
-        reports.iter().find(|r| r.label.starts_with(label)).unwrap()
+    fn encode(text: &str, e: TargetEncoding, f: ByteFormat) -> String {
+        format_bytes(&encode_text(text, e).expect("encodable"), f)
     }
 
     #[test]
     fn encodes_in_each_encoding() {
-        let r = encode_reports("Aあ");
-        assert_eq!(hex(&report(&r, "UTF-8").bytes), "41 E3 81 82");
-        assert_eq!(hex(&report(&r, "UTF-16LE").bytes), "41 00 42 30");
-        assert_eq!(hex(&report(&r, "UTF-16BE").bytes), "00 41 30 42");
-        assert_eq!(hex(&report(&r, "Shift_JIS").bytes), "41 82 A0");
-        assert_eq!(hex(&report(&r, "EUC-JP").bytes), "41 A4 A2");
+        use TargetEncoding::*;
+        assert_eq!(encode("Aあ", Utf8, ByteFormat::Hex), "41 E3 81 82");
+        assert_eq!(encode("Aあ", Utf16Le, ByteFormat::Hex), "41 00 42 30");
+        assert_eq!(encode("Aあ", Utf16Be, ByteFormat::Hex), "00 41 30 42");
+        assert_eq!(encode("Aあ", ShiftJis, ByteFormat::Hex), "41 82 A0");
+        assert_eq!(encode("Aあ", EucJp, ByteFormat::Hex), "41 A4 A2");
         // ISO-2022-JP は、漢字の前後にエスケープシーケンス(ESC $ B … ESC ( B)が入る
-        assert_eq!(hex(&report(&r, "ISO-2022-JP").bytes), "41 1B 24 42 24 22 1B 28 42");
+        assert_eq!(encode("Aあ", Iso2022Jp, ByteFormat::Hex), "41 1B 24 42 24 22 1B 28 42");
+        // 絵文字は UTF 系ならそのまま(サロゲートペア)
+        assert_eq!(encode("😀", Utf16Le, ByteFormat::Hex), "3D D8 00 DE");
     }
 
     #[test]
-    fn unmappable_characters_are_reported() {
-        // 絵文字は、Shift_JIS・EUC-JP・ISO-2022-JP のどれにも無い。UTF 系にはある
-        let r = encode_reports("a😀b");
-        for label in ["Shift_JIS", "EUC-JP", "ISO-2022-JP"] {
-            let rep = report(&r, label);
-            assert_eq!(rep.unmappable, vec!['😀'], "{label}");
-            assert_eq!(hex(&rep.bytes).replace(' ', "").contains("F09F"), false);
+    fn unmappable_characters_stop_the_conversion() {
+        // 絵文字は、Shift_JIS・EUC-JP・ISO-2022-JP のどれにも無い。変換せずに、その文字を知らせる
+        for e in [TargetEncoding::ShiftJis, TargetEncoding::EucJp, TargetEncoding::Iso2022Jp] {
+            assert_eq!(encode_text("a😀b😀", e), Err(vec!['😀']), "{e:?}");
         }
-        assert!(report(&r, "UTF-8").unmappable.is_empty());
+        assert!(encode_text("a😀b", TargetEncoding::Utf8).is_ok());
         // 丸数字は、Shift_JIS(CP932)にも、EUC-JP・ISO-2022-JP(NEC 拡張を含む)にもある
-        let r = encode_reports("①");
-        assert!(report(&r, "Shift_JIS").unmappable.is_empty());
-        assert!(report(&r, "ISO-2022-JP").unmappable.is_empty());
+        assert!(encode_text("①", TargetEncoding::ShiftJis).is_ok());
+        assert!(encode_text("①", TargetEncoding::Iso2022Jp).is_ok());
     }
 
     #[test]
-    fn unmappable_characters_are_deduplicated_and_capped() {
-        let text: String = ('\u{1F600}'..='\u{1F640}').chain(std::iter::repeat_n('\u{1F600}', 5)).collect();
-        let rep = encode_reports(&text);
-        let sjis = report(&rep, "Shift_JIS");
-        assert_eq!(sjis.unmappable.len(), MAX_UNMAPPABLE_LISTED);
-        assert!(sjis.unmappable_truncated);
+    fn unmappable_list_is_capped() {
+        let text: String = ('\u{1F600}'..='\u{1F64F}').collect();
+        let Err(chars) = encode_text(&text, TargetEncoding::ShiftJis) else { panic!("should fail") };
+        assert!(chars.len() <= MAX_UNMAPPABLE_LISTED + 1);
+        assert!(unmappable_summary(&chars).ends_with('…'));
+        assert_eq!(unmappable_summary(&['😀', '①']), "😀 ①");
     }
 
+    #[test]
+    fn byte_formats() {
+        assert_eq!(hex(&[0xE3, 0x81, 0x02]), "E3 81 02");
+        assert_eq!(hex(&[]), "");
+        // Base64(RFC 4648 のテストベクタ)
+        for (input, expected) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")] {
+            assert_eq!(format_bytes(input.as_bytes(), ByteFormat::Base64), expected, "{input:?}");
+        }
+        assert_eq!(encode("あ", TargetEncoding::Utf8, ByteFormat::Base64), "44GC");
+        // パーセントエンコード
+        assert_eq!(encode("日本 a-b_c.d~", TargetEncoding::Utf8, ByteFormat::Percent), "%E6%97%A5%E6%9C%AC%20a-b_c.d~");
+        assert_eq!(encode("日", TargetEncoding::ShiftJis, ByteFormat::Percent), "%93%FA");
+    }
+
+    #[test]
+    fn ids_are_unique() {
+        let ids: std::collections::HashSet<_> = TARGET_ENCODINGS.iter().map(|x| x.1).collect();
+        assert_eq!(ids.len(), TARGET_ENCODINGS.len());
+        let ids: std::collections::HashSet<_> = BYTE_FORMATS.iter().map(|x| x.1).collect();
+        assert_eq!(ids.len(), BYTE_FORMATS.len());
+        assert_eq!(encoding_label(TargetEncoding::ShiftJis), "Shift_JIS (CP932)");
+        assert_eq!(format_label(ByteFormat::Base64), "Base64(44GC)");
+    }
     #[test]
     fn utf8_misread_as_shift_jis() {
         // 「こんにちは」の UTF-8 を、Shift_JIS として読むと文字化けする(よくある例)
@@ -270,9 +360,5 @@ mod tests {
         }
     }
 
-    #[test]
-    fn hex_format() {
-        assert_eq!(hex(&[0xE3, 0x81, 0x02]), "E3 81 02");
-        assert_eq!(hex(&[]), "");
-    }
+
 }

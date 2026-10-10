@@ -26,17 +26,14 @@ pub enum View {
     Normal,
     Controls,
     Codes,
-    /// UTF-8・UTF-16・Shift_JIS などで書き出したバイト列
-    Encodings,
     /// 文字化けを直した候補
     Mojibake,
 }
 
-pub const VIEWS: [(View, &str, &str); 5] = [
+pub const VIEWS: [(View, &str, &str); 4] = [
     (View::Normal, "normal", "通常"),
     (View::Controls, "controls", "制御文字を表示"),
     (View::Codes, "codes", "文字コード一覧"),
-    (View::Encodings, "encodings", "エンコード別のバイト列"),
     (View::Mojibake, "mojibake", "文字化けを直す"),
 ];
 

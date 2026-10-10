@@ -3,6 +3,7 @@
 use muda::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 use crate::core::convert::{CONVERSION_GROUPS, Conversion, conversion_by_id, conversion_info};
+use crate::core::encoding::{BYTE_FORMATS, ByteFormat, TARGET_ENCODINGS, TargetEncoding};
 use crate::core::settings::{
     OPACITY_CHOICES, DEFAULT_OPACITY, Settings, THEMES, Theme, VIEWS, View,
 };
@@ -15,6 +16,8 @@ pub enum Command {
     View(View),
     /// テキストを変換して、クリップボードに入れ直す
     Convert(Conversion),
+    /// テキストを、別の文字エンコードのバイト列にして、文字列でクリップボードに入れる
+    EncodeCopy(TargetEncoding, ByteFormat),
     Theme(Theme),
     Opacity(u32),
     BackgroundSelect,
@@ -31,6 +34,11 @@ impl Command {
             Command::ToggleMonitoring => "toggle".into(),
             Command::View(v) => format!("view:{}", VIEWS.iter().find(|x| x.0 == *v).unwrap().1),
             Command::Convert(c) => format!("conv:{}", conversion_info(*c).id),
+            Command::EncodeCopy(e, f) => format!(
+                "enc:{}:{}",
+                TARGET_ENCODINGS.iter().find(|x| x.0 == *e).unwrap().1,
+                BYTE_FORMATS.iter().find(|x| x.0 == *f).unwrap().1
+            ),
             Command::Theme(t) => format!("theme:{}", THEMES.iter().find(|x| x.0 == *t).unwrap().1),
             Command::Opacity(o) => format!("opacity:{o}"),
             Command::BackgroundSelect => "bg:select".into(),
@@ -51,6 +59,13 @@ impl Command {
             },
             Some(("view", name)) => Command::View(VIEWS.iter().find(|x| x.1 == name)?.0),
             Some(("conv", id)) => Command::Convert(conversion_by_id(id)?.conversion),
+            Some(("enc", rest)) => {
+                let (enc, fmt) = rest.split_once(':')?;
+                Command::EncodeCopy(
+                    TARGET_ENCODINGS.iter().find(|x| x.1 == enc)?.0,
+                    BYTE_FORMATS.iter().find(|x| x.1 == fmt)?.0,
+                )
+            }
             Some(("theme", name)) => Command::Theme(THEMES.iter().find(|x| x.1 == name)?.0),
             Some(("opacity", n)) => Command::Opacity(n.parse().ok()?),
             Some(("bg", "select")) => Command::BackgroundSelect,
@@ -73,6 +88,8 @@ pub struct AppMenu {
     font_reset: MenuItem,
     /// 「テキストを変換してコピー」。内容がテキストのときだけ使える
     convert_menu: Submenu,
+    /// 「文字エンコードを変換してコピー」。内容がテキストのときだけ使える
+    encode_menu: Submenu,
 }
 
 fn item(cmd: Command, text: &str) -> MenuItem {
@@ -109,6 +126,21 @@ impl AppMenu {
             .collect();
         let group_refs: Vec<&dyn IsMenuItem> = groups.iter().map(|g| g as &dyn IsMenuItem).collect();
         let convert_menu = Submenu::with_items("テキストを変換してコピー", true, &group_refs).unwrap();
+
+        // 文字エンコードを変換してコピー: 文字エンコードごとのサブメニューに、書式の項目を並べる
+        let encodings: Vec<Submenu> = TARGET_ENCODINGS
+            .iter()
+            .map(|&(enc, _, enc_label)| {
+                let items: Vec<MenuItem> = BYTE_FORMATS
+                    .iter()
+                    .map(|&(fmt, _, fmt_label)| item(Command::EncodeCopy(enc, fmt), fmt_label))
+                    .collect();
+                let refs: Vec<&dyn IsMenuItem> = items.iter().map(|m| m as &dyn IsMenuItem).collect();
+                Submenu::with_items(enc_label, true, &refs).unwrap()
+            })
+            .collect();
+        let encoding_refs: Vec<&dyn IsMenuItem> = encodings.iter().map(|g| g as &dyn IsMenuItem).collect();
+        let encode_menu = Submenu::with_items("文字エンコードを変換してコピー", true, &encoding_refs).unwrap();
         let bg_select = item(Command::BackgroundSelect, "画像を選択…");
         let bg_clear = item(Command::BackgroundClear, "解除");
         let font_info = MenuItem::with_id("font:info", "", false, None);
@@ -133,6 +165,7 @@ impl AppMenu {
             &sep1,
             &view_menu,
             &convert_menu,
+            &encode_menu,
             &theme_menu,
             &opacity_menu,
             &bg_menu,
@@ -143,7 +176,7 @@ impl AppMenu {
         .unwrap();
 
         let app_menu =
-            AppMenu { menu, toggle, views, themes, opacities, bg_clear, font_info, font_reset, convert_menu };
+            AppMenu { menu, toggle, views, themes, opacities, bg_clear, font_info, font_reset, convert_menu, encode_menu };
         app_menu.sync(settings, monitoring, false);
         app_menu
     }
@@ -151,6 +184,7 @@ impl AppMenu {
     /// 設定や状態に合わせて、チェック・文言・有効/無効を更新する
     pub fn sync(&self, s: &Settings, monitoring: bool, is_text: bool) {
         self.convert_menu.set_enabled(is_text);
+        self.encode_menu.set_enabled(is_text);
         self.toggle.set_text(if monitoring { "監視を一時停止" } else { "監視を再開" });
         for (v, i) in &self.views {
             i.set_checked(*v == s.view);
@@ -207,6 +241,9 @@ mod tests {
         cmds.extend(VIEWS.iter().map(|v| Command::View(v.0)));
         cmds.extend(THEMES.iter().map(|t| Command::Theme(t.0)));
         cmds.extend(OPACITY_CHOICES.iter().map(|&o| Command::Opacity(o)));
+        for &(e, _, _) in &TARGET_ENCODINGS {
+            cmds.extend(BYTE_FORMATS.iter().map(|&(f, _, _)| Command::EncodeCopy(e, f)));
+        }
         cmds.extend(
             CONVERSION_GROUPS.iter().flat_map(|(_, items)| items.iter().map(|i| Command::Convert(i.conversion))),
         );
