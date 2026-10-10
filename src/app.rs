@@ -18,8 +18,8 @@ use crate::clipboard;
 use crate::core::content::{Content, ImageContent};
 use crate::core::convert::{Conversion, conversion_info, convert};
 use crate::core::encoding::{
-    ByteFormat, Candidate, TargetEncoding, encode_text, encoding_label, format_bytes, format_label, mojibake_candidates,
-    unmappable_summary,
+    ByteFormat, Candidate, TargetEncoding, encode_text, encoding_label, format_bytes, format_label, format_unavailable,
+    mojibake_candidates, unmappable_summary,
 };
 use crate::core::settings::{
     DEFAULT_FONT_SIZE, DEFAULT_SIZE, FONT_SIZE_RANGE, Settings, Theme, View,
@@ -217,6 +217,10 @@ impl App {
         let fmt = format_label(format).split('(').next().unwrap_or_default();
         match encode_text(text, encoding) {
             Ok(bytes) => {
+                if let Some(reason) = format_unavailable(&bytes, format) {
+                    self.notify(ctx, reason);
+                    return;
+                }
                 let converted = format_bytes(&bytes, format);
                 let done = format!("{enc} のバイト列({} バイト)を {fmt} でコピーしました", bytes.len());
                 self.copy_text(ctx, converted, &done);

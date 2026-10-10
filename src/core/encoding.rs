@@ -36,12 +36,15 @@ pub enum ByteFormat {
     Hex,
     Base64,
     Percent,
+    /// 1 バイト = 1 文字(U+0000〜U+00FF)。Latin-1 として読めば、元のバイト列に戻る
+    Latin1,
 }
 
-pub const BYTE_FORMATS: [(ByteFormat, &str, &str); 3] = [
+pub const BYTE_FORMATS: [(ByteFormat, &str, &str); 4] = [
     (ByteFormat::Hex, "hex", "16 進(E3 81 82)"),
     (ByteFormat::Base64, "base64", "Base64(44GC)"),
     (ByteFormat::Percent, "percent", "パーセントエンコード(%E3%81%82)"),
+    (ByteFormat::Latin1, "latin1", "1 バイト = 1 文字(日本語 → ÆüËÜ¸ì)"),
 ];
 
 pub fn encoding_label(e: TargetEncoding) -> &'static str {
@@ -130,7 +133,16 @@ pub fn format_bytes(bytes: &[u8], format: ByteFormat) -> String {
         ByteFormat::Hex => hex(bytes),
         ByteFormat::Base64 => base64(bytes),
         ByteFormat::Percent => percent(bytes),
+        ByteFormat::Latin1 => bytes.iter().map(|&b| b as char).collect(),
     }
+}
+
+/// その書式では、バイト列を文字列にできない理由(できるなら None)。
+/// 「1 バイト = 1 文字」は、NUL(0x00)を含むと、クリップボードの文字列が途中で終わってしまうため使えない
+/// (UTF-16 の英数字などは、上位バイトが 0x00 になる)
+pub fn format_unavailable(bytes: &[u8], format: ByteFormat) -> Option<&'static str> {
+    (format == ByteFormat::Latin1 && bytes.contains(&0))
+        .then_some("NUL(0x00)を含むため、この書式ではコピーできません")
 }
 
 /// 変換できなかった文字を、通知に出す形(「😀 ① …」)にする
@@ -287,6 +299,28 @@ mod tests {
         // パーセントエンコード
         assert_eq!(encode("日本 a-b_c.d~", TargetEncoding::Utf8, ByteFormat::Percent), "%E6%97%A5%E6%9C%AC%20a-b_c.d~");
         assert_eq!(encode("日", TargetEncoding::ShiftJis, ByteFormat::Percent), "%93%FA");
+    }
+
+    #[test]
+    fn one_byte_per_char() {
+        // EUC-JP の「日本語」(C6 FC CB DC B8 EC)を、1 バイト = 1 文字にする
+        assert_eq!(encode("日本語", TargetEncoding::EucJp, ByteFormat::Latin1), "ÆüËÜ¸ì");
+        // Latin-1 として読み直すと、元のバイト列に戻る(往復)
+        let bytes = encode_text("日本語のテキスト", TargetEncoding::EucJp).unwrap();
+        let text = format_bytes(&bytes, ByteFormat::Latin1);
+        let back: Vec<u8> = text.chars().map(|c| c as u32 as u8).collect();
+        assert_eq!(back, bytes);
+        // 文字化けの復元でも、同じ文字列から「日本語のテキスト」に戻せる
+        assert!(mojibake_candidates(&text).iter().any(|c| c.text == "日本語のテキスト"));
+    }
+
+    #[test]
+    fn one_byte_per_char_is_refused_with_nul() {
+        let utf16 = encode_text("A", TargetEncoding::Utf16Le).unwrap();
+        assert!(format_unavailable(&utf16, ByteFormat::Latin1).is_some());
+        assert!(format_unavailable(&utf16, ByteFormat::Hex).is_none());
+        let euc = encode_text("日本語", TargetEncoding::EucJp).unwrap();
+        assert!(format_unavailable(&euc, ByteFormat::Latin1).is_none());
     }
 
     #[test]
