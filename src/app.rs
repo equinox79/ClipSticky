@@ -426,11 +426,13 @@ impl App {
                             let cells = [&row.shown, &row.code, &row.utf8, &row.name];
                             for (k, cell) in cells.iter().enumerate() {
                                 let color = if k < 2 { text_color } else { pal.muted };
+                                // バックスラッシュだけは等幅フォントで描く(append_text の説明を参照)
+                                let font = if cell.as_str() == "\\" { FontId::monospace(px) } else { body.clone() };
                                 painter.text(
                                     pos2(rect.left() + cols[k], rect.center().y),
                                     Align2::LEFT_CENTER,
                                     cell,
-                                    body.clone(),
+                                    font,
                                     color,
                                 );
                             }
@@ -458,7 +460,7 @@ impl App {
                 job.wrap.max_width = area.width();
                 for piece in &pieces {
                     let color = if piece.marker { pal.muted } else { text_color };
-                    job.append(&piece.text, 0.0, TextFormat::simple(body.clone(), color));
+                    append_text(&mut job, &piece.text, px, color);
                 }
                 scroll(reset).show(ui, |ui| {
                     ui.set_width(area.width());
@@ -703,6 +705,23 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.settings.save();
+    }
+}
+
+/// `job` に文字列を足す。日本語フォントはバックスラッシュ(U+005C)を円記号(¥)の字形で描くため、
+/// コマンドやパスを正しく読めるよう、`\` だけを等幅フォントで描く
+fn append_text(job: &mut LayoutJob, text: &str, size: f32, color: Color32) {
+    let proportional = FontId::proportional(size);
+    let mut rest = text;
+    while let Some(i) = rest.find('\\') {
+        if i > 0 {
+            job.append(&rest[..i], 0.0, TextFormat::simple(proportional.clone(), color));
+        }
+        job.append("\\", 0.0, TextFormat::simple(FontId::monospace(size), color));
+        rest = &rest[i + 1..];
+    }
+    if !rest.is_empty() {
+        job.append(rest, 0.0, TextFormat::simple(proportional, color));
     }
 }
 
