@@ -10,7 +10,19 @@
 <meta property="og:image" content="https://equinox79.github.io/ClipSticky/images/scene-3.png">
 <link rel="alternate" hreflang="ja" href="https://equinox79.github.io/ClipSticky/">
 <link rel="stylesheet" href="../site.css">
-</head>
+<script>
+// 言語の切り替え: 選んだ言語を覚え、初回はブラウザの言語に合わせる / Remember the choice; first visit follows the browser language
+(function () {
+  var KEY = 'clipsticky-lang', here = 'en', stored = null;
+  try { stored = localStorage.getItem(KEY); } catch (e) {}
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest && e.target.closest('a.lang');
+    if (a) { try { localStorage.setItem(KEY, a.hreflang); } catch (e2) {} }
+  });
+  var want = stored || ((navigator.language || 'en').slice(0, 2) === 'ja' ? 'ja' : 'en');
+  if (want !== here && !location.hash) location.replace('../');
+})();
+</script></head>
 <body>
 <div class="wrap">
   <header class="top">
