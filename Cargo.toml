@@ -1,6 +1,6 @@
 [package]
 name = "clipsticky"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 description = "クリップボードの最新の内容を付箋のように表示する常駐アプリ"
 license = "MIT"
