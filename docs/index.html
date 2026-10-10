@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClipSticky - クリップボードを付箋のように表示</title>
+<meta name="description" content="クリップボードの最新の内容を、画面の隅に付箋のように表示する小さな常駐アプリ。Windows / macOS 対応、MIT ライセンス。">
+<meta property="og:title" content="ClipSticky">
+<meta property="og:description" content="クリップボードの最新の内容を、画面の隅に付箋のように表示する小さな常駐アプリ。">
+<meta property="og:image" content="https://equinox79.github.io/ClipSticky/images/scene-3.png">
+<link rel="alternate" hreflang="en" href="https://equinox79.github.io/ClipSticky/en/">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span>ClipSticky</span>
+    <nav>
+      <a href="#features">特長</a>
+      <a href="#install">インストール</a>
+      <a href="https://github.com/equinox79/ClipSticky">GitHub</a>
+      <a class="lang" href="en/" hreflang="en">English</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <h1>クリップボードを、付箋に。</h1>
+    <p class="lead">コピーした最新の内容を、画面の隅に付箋のように表示する小さな常駐アプリです。フォーカスは奪いません。Windows と macOS に対応。</p>
+    <div class="buttons">
+      <a class="btn" href="https://github.com/equinox79/ClipSticky/releases/latest">ダウンロード</a>
+      <a class="btn sub" href="https://github.com/equinox79/ClipSticky">ソースコード</a>
+    </div>
+    <img class="demo" src="images/demo.gif" alt="ClipSticky の動作: 文章・複数行のコマンド・画像・ファイル・文字コード・テキストの変換を付箋に表示">
+  </div>
+
+  <section id="features">
+    <h2>特長</h2>
+    <div class="features">
+      <div class="card"><h3>見える</h3><p>テキスト・画像・ファイル(パスの一覧)を、コピーした瞬間に表示します。</p></div>
+      <div class="card"><h3>邪魔しない</h3><p>最前面に出ても、作業中のアプリからフォーカスを奪いません。タスクバーや Dock にも出ません。</p></div>
+      <div class="card"><h3>確かめられる</h3><p>制御文字・不可視文字の表示、文字コード一覧、文字数・行数・バイト数。</p></div>
+      <div class="card"><h3>直せる</h3><p>改行コード、全角⇔半角、Unicode 正規化などを変換して、クリップボードに入れ直します。</p></div>
+      <div class="card"><h3>好みに合わせる</h3><p>テーマ(イエロー / ライト / ダーク)、透明度、背景画像、フォント、日本語 / English。</p></div>
+      <div class="card"><h3>常駐</h3><p>タスクトレイ / メニューバーに常駐。右クリックで同じメニューが開きます。</p></div>
+    </div>
+  </section>
+
+  <section id="shots">
+    <h2>スクリーンショット</h2>
+    <div class="shots">
+      <figure><img src="images/scene-1.png" alt="文章" loading="lazy"><figcaption>文章をそのまま表示</figcaption></figure>
+      <figure><img src="images/scene-2.png" alt="複数行のコマンド" loading="lazy"><figcaption>複数行のコマンドを確認</figcaption></figure>
+      <figure><img src="images/scene-3.png" alt="制御文字の表示" loading="lazy"><figcaption>制御文字を表示して、末尾の改行に気づく</figcaption></figure>
+      <figure><img src="images/scene-4.png" alt="画像" loading="lazy"><figcaption>画像もそのまま見られる</figcaption></figure>
+      <figure><img src="images/scene-5.png" alt="ファイルの一覧" loading="lazy"><figcaption>コピーしたファイルはパスの一覧</figcaption></figure>
+      <figure><img src="images/scene-6.png" alt="文字コード一覧" loading="lazy"><figcaption>文字コード(Unicode / UTF-8)の一覧</figcaption></figure>
+      <figure><img src="images/scene-7.png" alt="改行コードの変換" loading="lazy"><figcaption>改行コードなどを変換して入れ直す</figcaption></figure>
+    </div>
+    <p class="note">複数行のコマンドをコピーしたとき、末尾に改行(<code>↓</code>)が含まれているかどうかが一目で分かります。ターミナルに貼り付けて、うっかり実行されるのを防げます。</p>
+  </section>
+
+  <section id="install">
+    <h2>インストール</h2>
+    <p><a href="https://github.com/equinox79/ClipSticky/releases/latest">Releases</a> から、お使いの OS 用の zip をダウンロードします。</p>
+    <div class="cols">
+      <div class="card">
+        <h3>Windows</h3>
+        <ol>
+          <li><code>ClipSticky-vX.Y.Z-windows-x64.zip</code> を展開</li>
+          <li><code>clipsticky.exe</code> を好きな場所に置いて実行</li>
+        </ol>
+        <p>インストーラーはありません。署名していないため、初回に SmartScreen が出たら「詳細情報」→「実行」を選びます。</p>
+      </div>
+      <div class="card">
+        <h3>macOS</h3>
+        <ol>
+          <li><code>ClipSticky-vX.Y.Z-macos-universal.zip</code> を展開</li>
+          <li><code>ClipSticky.app</code> を「アプリケーション」へ</li>
+          <li>初回は右クリック → 開く</li>
+        </ol>
+        <p>公証を受けていないため、開けないときは <code>xattr -dr com.apple.quarantine /Applications/ClipSticky.app</code> を実行します。Apple M2 で動作確認済みです。</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    MIT License · <a href="https://github.com/equinox79/ClipSticky">GitHub</a> · <a href="https://github.com/equinox79/ClipSticky/issues">Issue</a><br>
+    サンプルの文章は、夏目漱石『吾輩は猫である』(1905 年)の冒頭です。
+  </footer>
+</div>
+</body>
+</html>
