@@ -72,7 +72,7 @@ Win32 の描画(`paint`)と、ウィンドウ・クリップボード・トレ�
 | テキスト・画像・ファイルの読み取り | `NSPasteboard` の `string` / `png` / `tiff` / `fileURL` を `objc2-app-kit` で読む | `arboard` クレートでも文字と画像は読めるが、ファイル一覧は読めない |
 | 最前面でフォーカスを奪わない | `NSPanel` + `.nonactivatingPanel` + `level = .floating`、`collectionBehavior` に `canJoinAllSpaces` と `fullScreenAuxiliary` | `winit` の標準 API だけでは足りないので、`objc2` で NSWindow を直接設定する |
 | Dock・Cmd+Tab に出さない | `Info.plist` の `LSUIElement = true`(アクセサリアプリ) | `.app` として動かす必要がある(`cargo run` では Dock に出る) |
-| メニューバーのアイコン | `tray-icon` クレート(+ `muda` でメニュー) | 左クリックでメニューが出るのが Mac の作法。Windows と操作が変わる |
+| メニューバーのアイコン | `tray-icon` クレート(+ `muda` でメニュー) | 左クリックでも右クリックでもメニューを出す(Mac の作法に合わせて、Windows も同じ) |
 | 右クリックメニュー | ウィンドウ上の右クリックで同じメニューを出す | `muda` のポップアップを使う |
 | 半透明・角丸 | 透明ウィンドウ + 自前の角丸(共通 GUI の場合)、またはぼかしは `NSVisualEffectView` | ぼかしを使うと「背景画像」「透明度」の挙動が Windows と変わる |
 | ファイル選択 | `rfd` クレート | |

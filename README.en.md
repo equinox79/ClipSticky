@@ -96,7 +96,7 @@ cargo run --release
 | Mouse wheel | Scroll long text |
 | × at the top right | Hide the window (the app keeps running) |
 | Right-click the window | Open the menu |
-| Tray / menu bar icon | Windows: left-click to show, right-click for the menu. macOS: click for the menu |
+| Tray / menu bar icon | Left- or right-click opens the menu |
 
 ### Menu
 

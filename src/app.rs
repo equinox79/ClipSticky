@@ -12,7 +12,7 @@ use eframe::egui::{
 use eframe::egui::scroll_area::ScrollSource;
 use eframe::egui::text::LayoutJob;
 use muda::MenuEvent;
-use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::{TrayIcon, TrayIconBuilder};
 
 use crate::clipboard;
 use crate::core::content::{Content, ImageContent};
@@ -107,23 +107,12 @@ impl App {
                 }
             }));
         }
-        {
-            let (tx, ctx) = (tx, ctx.clone());
-            TrayIconEvent::set_event_handler(Some(move |e: TrayIconEvent| {
-                if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
-                | TrayIconEvent::DoubleClick { .. } = e
-                {
-                    let _ = tx.send(Command::Show);
-                    ctx.request_repaint();
-                }
-            }));
-        }
 
         let (rgba, w, h) = tray_icon_rgba();
         let mut builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu.menu.clone()))
             .with_tooltip("ClipSticky")
-            .with_menu_on_left_click(cfg!(target_os = "macos"));
+            .with_menu_on_left_click(true);
         if let Ok(icon) = tray_icon::Icon::from_rgba(rgba, w, h) {
             builder = builder.with_icon(icon);
         }
