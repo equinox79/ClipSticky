@@ -26,15 +26,12 @@ pub enum View {
     Normal,
     Controls,
     Codes,
-    /// 文字化けを直した候補
-    Mojibake,
 }
 
-pub const VIEWS: [(View, &str, &str); 4] = [
+pub const VIEWS: [(View, &str, &str); 3] = [
     (View::Normal, "normal", "通常"),
     (View::Controls, "controls", "制御文字を表示"),
     (View::Codes, "codes", "文字コード一覧"),
-    (View::Mojibake, "mojibake", "文字化けを直す"),
 ];
 
 #[derive(Clone, Debug, PartialEq)]

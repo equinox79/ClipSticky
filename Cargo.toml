@@ -15,7 +15,6 @@ panic = "abort"
 [dependencies]
 arboard = "3.6.1"
 eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts"] }
-encoding_rs = "0.8.42"
 fontdb = "0.24.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 muda = "0.21.2"

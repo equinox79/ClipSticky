@@ -2,7 +2,6 @@
 
 pub mod content;
 pub mod convert;
-pub mod encoding;
 pub mod settings;
 pub mod text;
 pub mod theme;
