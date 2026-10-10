@@ -4,7 +4,7 @@
 コピーするたびに表示が更新され、他のアプリのフォーカスは奪いません。Windows と macOS に対応しています(Rust 製)。
 
 <p align="center">
-  <img src="docs/images/demo.gif" alt="ClipSticky の動作: 文章・複数行のコマンド・画像・ファイル・文字コードを付箋に表示" width="576">
+  <img src="docs/images/demo.gif" alt="ClipSticky の動作: 文章・複数行のコマンド・画像・ファイル・文字コード・文字化けの復元・テキストの変換を付箋に表示" width="540">
 </p>
 
 - テキスト・画像・ファイル(コピーしたファイルのパス一覧)に対応
@@ -31,6 +31,11 @@
     <td align="center"><img src="docs/images/scene-4.png" alt="画像" width="320"><br>画像もそのまま見られる</td>
     <td align="center"><img src="docs/images/scene-5.png" alt="ファイルの一覧" width="320"><br>コピーしたファイルはパスの一覧</td>
     <td align="center"><img src="docs/images/scene-6.png" alt="文字コード一覧" width="320"><br>文字コード(Unicode / UTF-8)の一覧</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/scene-7.png" alt="エンコード別のバイト列" width="320"><br>エンコード別のバイト列。Shift_JIS などに無い文字も分かる</td>
+    <td align="center"><img src="docs/images/scene-8.png" alt="文字化けを直す" width="320"><br>文字化けを直して、クリックでコピー</td>
+    <td align="center"><img src="docs/images/scene-9.png" alt="改行コードの変換" width="320"><br>改行コードなどを変換して、クリップボードに入れ直す</td>
   </tr>
 </table>
 
@@ -186,10 +191,16 @@ GUI は [egui](https://github.com/emilk/egui)(eframe)で、Windows と macOS で
 src/
   main.rs        起動(ウィンドウの設定)
   app.rs         描画と操作(egui)
-  clipboard.rs   クリップボードの監視と読み取り(arboard)
+  clipboard.rs   クリップボードの監視と読み取り(arboard)。変換結果の書き込みは app.rs
   menu.rs        メニュー(muda)とトレイアイコン(tray-icon)
   fonts.rs       システムのフォントの読み込み(fontdb)
-  core/          OS に依存しない部分(内容の型、テキスト加工、設定、配色)。単体テストあり
+  core/          OS に依存しない部分。単体テストあり
+    content.rs     クリップボードの内容の型
+    text.rs        制御文字の表示、文字コード一覧、文字数などの表示用の加工
+    encoding.rs    エンコード別のバイト列、文字化けの復元(encoding_rs)
+    convert.rs     テキストの変換(改行コード、全角・半角、正規化など。unicode-normalization)
+    settings.rs    設定の読み書き
+    theme.rs       配色
   platform/
     windows.rs   フォーカスを奪わないスタイル、表示/非表示、枠線、メニューの表示
     macos.rs     アクセサリアプリ化、全 Space で最前面、表示/非表示、メニューの表示
