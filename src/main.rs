@@ -20,6 +20,9 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{PCWSTR, PWSTR, w};
 
 const APP_NAME: &str = "ClipSticky";
+const DEFAULT_FONT: &str = "Yu Gothic UI";
+const DEFAULT_FONT_SIZE: i32 = 15; // 本文のサイズ(px)
+const FONT_SIZE_RANGE: (i32, i32) = (9, 48);
 const DEFAULT_OPACITY: u32 = 96;
 const OPACITY_CHOICES: [u32; 7] = [100, 96, 90, 80, 70, 60, 50];
 /// 背景画像の上に重ねるテーマ色の濃さ(0-255)。大きいほど文字が読みやすい
@@ -245,6 +248,9 @@ struct Settings {
     theme: Theme,
     view: View,
     background: Option<String>,
+    /// フォント名(None なら既定)。本文のサイズは 96dpi 換算のピクセル
+    font: Option<String>,
+    font_size: i32,
 }
 
 thread_local! {
@@ -266,6 +272,8 @@ thread_local! {
             theme: Theme::Yellow,
             view: View::Normal,
             background: None,
+            font: None,
+            font_size: DEFAULT_FONT_SIZE,
         })
     };
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
@@ -315,6 +323,12 @@ fn load_settings() {
                     }
                 }
                 "background" if !value.is_empty() => s.background = Some(value.to_string()),
+                "font" if !value.is_empty() => s.font = Some(value.to_string()),
+                "font_size" => {
+                    if let Ok(v) = value.parse::<i32>() {
+                        s.font_size = v.clamp(FONT_SIZE_RANGE.0, FONT_SIZE_RANGE.1);
+                    }
+                }
                 _ => {}
             }
         }
@@ -345,6 +359,9 @@ unsafe fn save_settings(hwnd: HWND) {
         );
         if let Some(bg) = &s.background {
             text.push_str(&format!("background={bg}\n"));
+        }
+        if let Some(font) = &s.font {
+            text.push_str(&format!("font={font}\nfont_size={}\n", s.font_size));
         }
         text
     });
@@ -439,6 +456,37 @@ unsafe fn pick_image(owner: HWND) -> Option<String> {
         Some(String::from_utf16_lossy(&file[..len]))
     } else {
         None
+    }
+}
+
+/// フォント選択ダイアログを出す。選んだ(フォント名, 本文サイズ px)を返す
+unsafe fn pick_font(owner: HWND) -> Option<(String, i32)> {
+    unsafe {
+        let (face, size) = SETTINGS.with(|s| {
+            let s = s.borrow();
+            (s.font.clone().unwrap_or(DEFAULT_FONT.into()), s.font_size)
+        });
+        let mut lf = LOGFONTW { lfHeight: -(size * GetDpiForSystem() as i32 / 96), ..Default::default() };
+        lf.lfCharSet = DEFAULT_CHARSET;
+        let name = wide(&face);
+        let n = name.len().min(31);
+        lf.lfFaceName[..n].copy_from_slice(&name[..n]);
+
+        let mut cf = CHOOSEFONTW {
+            lStructSize: std::mem::size_of::<CHOOSEFONTW>() as u32,
+            hwndOwner: owner,
+            lpLogFont: &mut lf,
+            Flags: CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT | CF_FORCEFONTEXIST,
+            ..Default::default()
+        };
+        if !ChooseFontW(&mut cf).as_bool() {
+            return None;
+        }
+        let len = lf.lfFaceName.iter().position(|&c| c == 0).unwrap_or(lf.lfFaceName.len());
+        let face = String::from_utf16_lossy(&lf.lfFaceName[..len]);
+        // iPointSize は 1/10 ポイント。96dpi 換算のピクセルにする
+        let px = (cf.iPointSize * 96 / 720).clamp(FONT_SIZE_RANGE.0, FONT_SIZE_RANGE.1);
+        Some((face, px))
     }
 }
 
@@ -605,6 +653,9 @@ fn in_rect(r: &RECT, x: i32, y: i32) -> bool {
 }
 
 unsafe fn make_font(dpi: u32, px: i32, bold: bool) -> HFONT {
+    let mut face = wide(&SETTINGS.with(|s| s.borrow().font.clone()).unwrap_or(DEFAULT_FONT.into()));
+    face.truncate(31); // LOGFONT.lfFaceName は終端込みで 32 文字
+    face.push(0);
     unsafe {
         CreateFontW(
             -(px * dpi as i32 / 96),
@@ -620,7 +671,7 @@ unsafe fn make_font(dpi: u32, px: i32, bold: bool) -> HFONT {
             CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY,
             0,
-            w!("Yu Gothic UI"),
+            PCWSTR(face.as_ptr()),
         )
     }
 }
@@ -771,7 +822,8 @@ unsafe fn paint(hwnd: HWND) {
         let _ = DeleteObject(bg.into());
 
         SetBkMode(mem, TRANSPARENT);
-        let body = make_font(dpi, 15, false);
+        let body_px = SETTINGS.with(|s| s.borrow().font_size);
+        let body = make_font(dpi, body_px, false);
         let small = make_font(dpi, 12, false);
         let label = make_font(dpi, 12, true);
         let glyph = make_font(dpi, 22, false);
@@ -820,7 +872,9 @@ unsafe fn paint(hwnd: HWND) {
                     let mut tm = TEXTMETRICW::default();
                     let _ = GetTextMetricsW(mem, &mut tm);
                     let row_h = tm.tmHeight + s(4);
-                    let cols = [0, s(76), s(160), s(268)];
+                    // 列幅は本文サイズに比例させる
+                    let col = |v: i32| s(v) * body_px / DEFAULT_FONT_SIZE;
+                    let cols = [0, col(76), col(160), col(268)];
                     let flags = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS;
                     for (i, row) in rows.iter().enumerate() {
                         let y = top + i as i32 * row_h;
@@ -948,6 +1002,8 @@ const CMD_TOGGLE: usize = 2;
 const CMD_EXIT: usize = 3;
 const CMD_BG_SELECT: usize = 4;
 const CMD_BG_CLEAR: usize = 5;
+const CMD_FONT_SELECT: usize = 6;
+const CMD_FONT_RESET: usize = 7;
 const CMD_OPACITY_BASE: usize = 100; // 100 + OPACITY_CHOICES のインデックス
 const CMD_THEME_BASE: usize = 200; // 200 + THEMES のインデックス
 const CMD_VIEW_BASE: usize = 300; // 300 + VIEWS のインデックス
@@ -1099,6 +1155,17 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             let clear = if has_bg { MF_STRING } else { MF_STRING | MF_GRAYED };
             add_item(sub, clear, CMD_BG_CLEAR, "解除");
         });
+        add_submenu(menu, "フォント", |sub| {
+            let (font, size) = SETTINGS.with(|s| {
+                let s = s.borrow();
+                (s.font.clone(), s.font_size)
+            });
+            let current = format!("現在: {} {}px", font.as_deref().unwrap_or(DEFAULT_FONT), size);
+            add_item(sub, MF_STRING | MF_GRAYED, 0, &current);
+            add_item(sub, MF_STRING, CMD_FONT_SELECT, "フォントを選択…");
+            let reset = if font.is_some() { MF_STRING } else { MF_STRING | MF_GRAYED };
+            add_item(sub, reset, CMD_FONT_RESET, "既定に戻す");
+        });
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         add_item(menu, MF_STRING, CMD_EXIT, "終了");
 
@@ -1123,6 +1190,22 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             }
             CMD_BG_CLEAR => {
                 set_background(hwnd, None);
+            }
+            CMD_FONT_SELECT | CMD_FONT_RESET => {
+                let choice = if cmd.0 as usize == CMD_FONT_SELECT {
+                    match pick_font(hwnd) {
+                        Some((face, px)) => (Some(face), px),
+                        None => return,
+                    }
+                } else {
+                    (None, DEFAULT_FONT_SIZE)
+                };
+                SETTINGS.with(|s| {
+                    let mut s = s.borrow_mut();
+                    (s.font, s.font_size) = choice;
+                });
+                save_settings(hwnd);
+                let _ = InvalidateRect(Some(hwnd), None, false);
             }
             c if (CMD_OPACITY_BASE..CMD_OPACITY_BASE + OPACITY_CHOICES.len()).contains(&c) => {
                 apply_opacity(hwnd, OPACITY_CHOICES[c - CMD_OPACITY_BASE]);
