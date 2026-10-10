@@ -5,11 +5,12 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align2, Color32, CornerRadius, CursorIcon, FontId, Label, Rect, ResizeDirection, RichText,
-    ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, UiBuilder,
+    self, Align2, Color32, CornerRadius, CursorIcon, FontId, Label, Rect, ResizeDirection,
+    ScrollArea, Sense, TextFormat, Stroke, StrokeKind, TextureHandle, TextureOptions, UiBuilder,
     ViewportCommand, pos2, vec2,
 };
 use eframe::egui::scroll_area::ScrollSource;
+use eframe::egui::text::LayoutJob;
 use muda::MenuEvent;
 use tray_icon::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
@@ -18,7 +19,7 @@ use crate::core::content::{Content, ImageContent};
 use crate::core::settings::{
     DEFAULT_FONT_SIZE, DEFAULT_SIZE, FONT_SIZE_RANGE, Settings, Theme, View,
 };
-use crate::core::text::{code_rows, detail, display_text, type_label};
+use crate::core::text::{Piece, code_rows, detail, display_pieces, type_label};
 use crate::core::theme::{Palette, blend, palette};
 use crate::fonts::{DEFAULT_FONT, FontBook};
 use crate::menu::{AppMenu, Command, tray_icon_rgba};
@@ -446,19 +447,22 @@ impl App {
                 });
             }
             Content::Text(_) | Content::Files(_) | Content::Error(_) | Content::Unknown => {
-                let (text, color) = match &self.content {
-                    Content::Text(t) => (display_text(t, self.settings.view), text_color),
-                    Content::Files(f) => (f.join("\n"), text_color),
-                    Content::Error(e) => (format!("取得エラー: {e}"), text_color),
-                    _ => ("未知の形式(または空)です。".to_string(), pal.muted),
+                // (文字列, 記号か) の片に分けて、記号だけを薄い色で描く(エディタの制御文字表示と同じ)
+                let pieces = match &self.content {
+                    Content::Text(t) => display_pieces(t, self.settings.view),
+                    Content::Files(f) => vec![Piece { text: f.join("\n"), marker: false }],
+                    Content::Error(e) => vec![Piece { text: format!("取得エラー: {e}"), marker: false }],
+                    _ => vec![Piece { text: "未知の形式(または空)です。".to_string(), marker: true }],
                 };
+                let mut job = LayoutJob::default();
+                job.wrap.max_width = area.width();
+                for piece in &pieces {
+                    let color = if piece.marker { pal.muted } else { text_color };
+                    job.append(&piece.text, 0.0, TextFormat::simple(body.clone(), color));
+                }
                 scroll(reset).show(ui, |ui| {
                     ui.set_width(area.width());
-                    ui.add(
-                        Label::new(RichText::new(text).font(body).color(color))
-                            .wrap()
-                            .selectable(false),
-                    );
+                    ui.add(Label::new(job).wrap().selectable(false));
                 });
             }
         }

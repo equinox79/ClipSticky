@@ -42,23 +42,82 @@ pub fn special_char(c: char) -> Option<(String, String)> {
     }
 }
 
-/// 制御文字を記号に置き換える。改行・タブは記号の後ろで実際にも改行/タブする
-pub fn show_controls(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + text.len() / 8);
+/// 表示用のテキストの一片。`marker` が true のものは、制御文字などを表す記号(薄い色で描く)
+#[derive(Debug, PartialEq)]
+pub struct Piece {
+    pub text: String,
+    pub marker: bool,
+}
+
+/// 同じ種類が続くなら、末尾の片にまとめて足す
+fn push_piece(out: &mut Vec<Piece>, text: &str, marker: bool) {
+    match out.last_mut() {
+        Some(last) if last.marker == marker => last.text.push_str(text),
+        _ => out.push(Piece { text: text.to_string(), marker }),
+    }
+}
+
+/// タブ位置の幅(桁数)
+const TAB_WIDTH: usize = 4;
+
+/// 制御文字をエディタのように記号で表す。記号は `marker` の片になる。
+///
+/// - 改行: CRLF は `↵`、LF は `↓`、単独の CR は `←`。記号の後ろで実際にも改行する
+/// - タブ: `→`(次のタブ位置まで空白で埋める)
+/// - 半角スペースは `·`、全角スペースは `□`、NBSP は `°`
+/// - そのほかの制御文字や不可視文字は `⟦名前⟧`
+/// - 末尾に `[EOF]`(`eof` が true のとき。省略して切った場合は付けない)
+pub fn controls_pieces(text: &str, eof: bool) -> Vec<Piece> {
+    let mut out = Vec::new();
+    let mut col = 0usize;
     let mut chars = text.chars().peekable();
+    let mut plain = [0u8; 4];
     while let Some(c) = chars.next() {
         match c {
             '\r' if chars.peek() == Some(&'\n') => {
                 chars.next();
-                out.push_str("⟦CR⟧⟦LF⟧\n");
+                push_piece(&mut out, "↵", true);
+                push_piece(&mut out, "\n", false);
+                col = 0;
             }
-            '\n' => out.push_str("⟦LF⟧\n"),
-            '\t' => out.push_str("⟦TAB⟧\t"),
+            '\n' => {
+                push_piece(&mut out, "↓", true);
+                push_piece(&mut out, "\n", false);
+                col = 0;
+            }
+            '\r' => {
+                push_piece(&mut out, "←", true);
+                push_piece(&mut out, "\n", false);
+                col = 0;
+            }
+            '\t' => {
+                let n = TAB_WIDTH - col % TAB_WIDTH;
+                push_piece(&mut out, &format!("→{}", " ".repeat(n - 1)), true);
+                col += n;
+            }
+            ' ' => {
+                push_piece(&mut out, "·", true);
+                col += 1;
+            }
+            '\u{3000}' => {
+                push_piece(&mut out, "□", true);
+                col += 2;
+            }
+            '\u{A0}' => {
+                push_piece(&mut out, "°", true);
+                col += 1;
+            }
             _ => match special_char(c) {
-                Some((sym, _)) => out.push_str(&sym),
-                None => out.push(c),
+                Some((sym, _)) => push_piece(&mut out, &sym, true),
+                None => {
+                    push_piece(&mut out, c.encode_utf8(&mut plain), false);
+                    col += 1;
+                }
             },
         }
+    }
+    if eof {
+        push_piece(&mut out, "[EOF]", true);
     }
     out
 }
@@ -122,18 +181,19 @@ pub fn expand_tabs(text: &str, width: usize) -> String {
 }
 
 /// 通常 / 制御文字表示のときに描画するテキストを作る(長すぎる分は省略)
-pub fn display_text(text: &str, view: View) -> String {
+pub fn display_pieces(text: &str, view: View) -> Vec<Piece> {
     let total = text.chars().count();
+    let truncated = total > MAX_DISPLAY_CHARS;
     let body: String = text.chars().take(MAX_DISPLAY_CHARS).collect();
-    let mut shown = if view == View::Controls {
-        expand_tabs(&show_controls(&body), 4)
+    let mut pieces = if view == View::Controls {
+        controls_pieces(&body, !truncated)
     } else {
-        expand_tabs(&normalize_newlines(&body), 4)
+        vec![Piece { text: expand_tabs(&normalize_newlines(&body), TAB_WIDTH), marker: false }]
     };
-    if total > MAX_DISPLAY_CHARS {
-        shown.push_str(&format!("\n…(以降 {} 文字は省略)", total - MAX_DISPLAY_CHARS));
+    if truncated {
+        push_piece(&mut pieces, &format!("\n…(以降 {} 文字は省略)", total - MAX_DISPLAY_CHARS), true);
     }
-    shown
+    pieces
 }
 
 pub fn type_label(content: &Content) -> &'static str {
@@ -165,11 +225,69 @@ pub fn detail(content: &Content) -> String {
 mod tests {
     use super::*;
 
+    fn piece(text: &str, marker: bool) -> Piece {
+        Piece { text: text.to_string(), marker }
+    }
+
     #[test]
-    fn controls_are_visible_and_keep_line_breaks() {
-        assert_eq!(show_controls("a\r\nb\tc\nd"), "a⟦CR⟧⟦LF⟧\nb⟦TAB⟧\tc⟦LF⟧\nd");
-        assert_eq!(show_controls("a b\u{3000}c\u{200B}"), "a·b□c⟦ZWSP⟧");
-        assert_eq!(show_controls("\u{0}\u{7F}"), "⟦NUL⟧⟦DEL⟧");
+    fn newlines_are_shown_like_an_editor() {
+        // CRLF は ↵、LF は ↓、単独の CR は ←。記号の後ろで実際にも改行する
+        assert_eq!(
+            controls_pieces("a\r\nb\nc\rd", true),
+            vec![
+                piece("a", false),
+                piece("↵", true),
+                piece("\nb", false),
+                piece("↓", true),
+                piece("\nc", false),
+                piece("←", true),
+                piece("\nd", false),
+                piece("[EOF]", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn tabs_fill_to_the_next_tab_stop() {
+        // 桁 1 のタブは 3 桁分、桁 0 のタブは 4 桁分
+        assert_eq!(
+            controls_pieces("a\tb\n\tc", false),
+            vec![
+                piece("a", false),
+                piece("→  ", true),
+                piece("b", false),
+                piece("↓", true),
+                piece("\n", false),
+                piece("→   ", true),
+                piece("c", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn spaces_and_invisibles_are_markers() {
+        assert_eq!(
+            controls_pieces("a b\u{3000}c\u{A0}\u{200B}", false),
+            vec![
+                piece("a", false),
+                piece("·", true),
+                piece("b", false),
+                piece("□", true),
+                piece("c", false),
+                piece("°⟦ZWSP⟧", true),
+            ]
+        );
+        assert_eq!(controls_pieces("\u{0}\u{7F}", false), vec![piece("⟦NUL⟧⟦DEL⟧", true)]);
+    }
+
+    #[test]
+    fn eof_marker_is_omitted_when_truncated() {
+        let text = "x".repeat(MAX_DISPLAY_CHARS + 3);
+        let pieces = display_pieces(&text, View::Controls);
+        assert!(pieces.iter().all(|p| p.text != "[EOF]"));
+        assert!(pieces.last().unwrap().text.ends_with("(以降 3 文字は省略)"));
+        let short = display_pieces("ab", View::Controls);
+        assert_eq!(short.last().unwrap().text, "[EOF]");
     }
 
     #[test]
@@ -202,7 +320,8 @@ mod tests {
     #[test]
     fn long_text_is_truncated() {
         let text = "x".repeat(MAX_DISPLAY_CHARS + 3);
-        assert!(display_text(&text, View::Normal).ends_with("(以降 3 文字は省略)"));
+        let pieces = display_pieces(&text, View::Normal);
+        assert!(pieces.last().unwrap().text.ends_with("(以降 3 文字は省略)"));
     }
 
     #[test]
