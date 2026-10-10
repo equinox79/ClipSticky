@@ -2,13 +2,18 @@ name: CI
 
 on:
   push:
-    branches: [master]
   pull_request:
 
 jobs:
-  build:
-    runs-on: windows-latest
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - run: cargo clippy --locked -- -D warnings
       - run: cargo build --release --locked

@@ -1,8 +1,29 @@
 # Mac 対応と配布(インストール)の検討
 
-状態: **検討メモ(未実装)**。実装前に方針を決めるための文書です。
+状態: **共通 GUI(egui)への移行と Mac 版の初期実装を済ませた。Mac 実機での確認が残っている**。
+章 1〜3 は実装前の検討メモ(当時の記録)、章 4 以降が決定事項と進捗です。
 
-## 1. 現状
+## 0. 進捗(最新)
+
+- 完了: `core/`(OS 非依存)の切り出し、egui への移行、Windows 版の動作確認(フォーカスを奪わない、非表示からの復帰、
+  ドラッグ・リサイズ、メニュー、画像・ファイル・文字コード・制御文字・背景画像・フォント選択)
+- 完了: macOS 向けの実装(`src/platform/macos.rs`)と、型検査・clippy(`cargo check` / `cargo clippy --target aarch64-apple-darwin`)
+- 完了: CI(Windows・macOS でテスト・clippy・ビルド)、リリース用ワークフロー(両 OS の zip)、`.app` 作成スクリプト
+- **未確認(Mac 実機が必要)**: 実際の起動と表示、フォーカスを奪わないこと、メニューバーのアイコン、全 Space・フルスクリーン上での表示、
+  ドラッグ・リサイズ、`build-app.sh` の動作、ad-hoc 署名した `.app` の初回起動
+
+### Mac 実機で確認してほしい手順
+
+1. `cargo run --release` で起動し、何かをコピーして付箋が出ること。入力中の他のアプリの文字入力が途切れないこと
+2. メニューバーにアイコンが出て、クリックでメニューが開くこと(Dock には出ないこと)
+3. ウィンドウのドラッグ移動・端でのリサイズ・右クリックメニュー・× で隠す→コピーで再表示
+4. フルスクリーンのアプリや別の Space の上に出ること
+5. `./packaging/macos/build-app.sh` で `.app` が作られ、右クリック→開くで起動できること
+
+うまく動かない場合に疑う箇所: `platform/macos.rs` の `show()`(`orderFrontRegardless`)、eframe が表示時に
+アプリをアクティブにしてしまう場合(winit の `makeKeyAndOrderFront`)、`cursor_pos`(座標の上下反転)。
+
+## 1. 現状(移行前)
 
 - 実装は Windows 専用(Win32 + GDI + DWM、`src/main.rs` に約 1,200 行)。
 - 配布物は `cargo build --release` で作る単体 exe のみ。インストーラー・自動起動・署名は無い。
@@ -158,11 +179,13 @@ CI(GitHub Actions の macOS ランナー)でビルドが通ることまでは確
   ad-hoc 署名は付ける。ただし初回は警告が出るので、README に「右クリック→開く」または
   `xattr -dr com.apple.quarantine ClipSticky.app` の手順を載せる。
   将来、利用者が増えたら公証のために登録を再検討する。
+
 ## 5. おすすめの順序
 
 1. ~~ライセンスを決める~~(MIT に決定。`LICENSE` を追加済み)
-2. ~~Windows 版を GitHub Releases の zip で配る~~(`.github/workflows/release.yml` を追加済み。`v0.1.0` のようなタグを push すると zip が公開される)
-3. 「ログイン時に起動」、アイコン、版数表示を追加し、winget に提出する
-4. `core/` を切り出し、Mac 版をプロトタイプする(Mac 実機で確認)
-5. Mac の署名・公証・`.dmg`・Homebrew Cask
-6. CI でタグから両 OS のリリース物を自動生成する
+2. ~~Windows 版を GitHub Releases の zip で配る~~(`.github/workflows/release.yml`。`v0.1.0` のようなタグを push すると zip が公開される)
+3. ~~`core/` を切り出し、Mac 版をプロトタイプする~~(実装済み。**Mac 実機での確認が次**)
+4. ~~CI でタグから両 OS のリリース物を自動生成する~~(Windows の zip と macOS の zip を作る設定を追加済み。初回のタグで動作確認)
+5. 「ログイン時に起動」、アイコン(`.ico` / `.icns`)、バージョン情報を追加する
+6. 署名: SignPath Foundation への申請(Windows)。Mac は ad-hoc 署名のまま
+7. 余裕があれば winget、Homebrew Cask

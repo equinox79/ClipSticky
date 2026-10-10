@@ -61,3 +61,6 @@
 #*.PDF   diff=astextplain
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
+
+# シェルスクリプトは常に LF(CRLF だと macOS/Linux で動かない)
+*.sh text eol=lf
