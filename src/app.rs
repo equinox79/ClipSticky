@@ -537,7 +537,7 @@ impl App {
         }
     }
 
-    fn ui_font_picker(&mut self, ui: &mut egui::Ui, area: Rect) {
+    fn ui_font_picker(&mut self, ui: &mut egui::Ui, area: Rect, pal: &Palette) {
         #[derive(PartialEq)]
         enum Action {
             None,
@@ -549,6 +549,23 @@ impl App {
         let mut size = self.settings.font_size;
         let current = self.settings.font.clone().unwrap_or_else(|| DEFAULT_FONT.to_string());
         let mut picker = self.font_picker.take().expect("font picker is open");
+
+        // 一覧は、背景の透明度や背景画像に関係なく読めるように、不透明な面の上に、テーマの色で描く
+        let panel = area.expand(6.0);
+        ui.painter().rect_filled(panel, 8.0, pal.bg);
+        ui.painter().rect_stroke(panel, 8.0, Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+        let field = pal.bg.lerp_to_gamma(pal.text, 0.08);
+        {
+            let v = ui.visuals_mut();
+            v.override_text_color = Some(pal.text);
+            v.extreme_bg_color = field;
+            v.widgets.inactive.weak_bg_fill = field;
+            v.widgets.inactive.bg_fill = field;
+            v.widgets.hovered.weak_bg_fill = pal.border;
+            v.widgets.active.weak_bg_fill = pal.border;
+            v.selection.bg_fill = pal.border;
+            v.selection.stroke = Stroke::new(1.0, pal.text);
+        }
 
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
@@ -765,7 +782,7 @@ impl eframe::App for App {
             ui.scope_builder(UiBuilder::new().max_rect(area), |ui| {
                 ui.set_clip_rect(area.intersect(ui.clip_rect()));
                 if self.font_picker.is_some() {
-                    self.ui_font_picker(ui, area);
+                    self.ui_font_picker(ui, area, &pal);
                 } else {
                     self.ui_content(ui, area, &pal);
                 }
