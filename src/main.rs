@@ -1,27 +1,83 @@
 #![windows_subsystem = "windows"]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::DataExchange::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
 use windows::Win32::System::Ole::{CF_DIB, CF_HDROP, CF_UNICODETEXT};
+use windows::Win32::UI::Controls::Dialogs::*;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Shell::{
-    DragQueryFileW, HDROP, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
-    Shell_NotifyIconW,
+    DragAcceptFiles, DragFinish, DragQueryFileW, HDROP, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD,
+    NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{PCWSTR, w};
+use windows::core::{PCWSTR, PWSTR, w};
 
-const DEFAULT_TITLE: &str = "最新のクリップボード";
-const MAX_CONTENT_W: i32 = 340;
-const MAX_IMAGE_H: i32 = 140;
 const DEFAULT_OPACITY: u32 = 96;
 const OPACITY_CHOICES: [u32; 7] = [100, 96, 90, 80, 70, 60, 50];
+/// 背景画像の上に重ねるテーマ色の濃さ(0-255)。大きいほど文字が読みやすい
+const SCRIM_ALPHA: u8 = 170;
+/// 背景画像は読み込み時にこのサイズ(長辺)まで縮小する
+const BACKGROUND_MAX_SIDE: u32 = 1280;
+const DEFAULT_SIZE: (i32, i32) = (380, 220); // DIP
+const MIN_SIZE: (i32, i32) = (240, 120); // DIP
+
+// ---------- テーマ ----------
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Theme {
+    Yellow,
+    Light,
+    Dark,
+}
+
+const THEMES: [(Theme, &str, &str); 3] = [
+    (Theme::Yellow, "yellow", "イエロー"),
+    (Theme::Light, "light", "ライト"),
+    (Theme::Dark, "dark", "ダーク"),
+];
+
+struct Palette {
+    bg: COLORREF,
+    text: COLORREF,
+    muted: COLORREF,
+    border: COLORREF,
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
+    COLORREF(r as u32 | (g as u32) << 8 | (b as u32) << 16)
+}
+
+fn palette(theme: Theme) -> Palette {
+    match theme {
+        Theme::Yellow => Palette {
+            bg: rgb(0xFF, 0xF4, 0xB8),
+            text: rgb(0x3A, 0x32, 0x14),
+            muted: rgb(0x8C, 0x7F, 0x4A),
+            border: rgb(0xE6, 0xD3, 0x82),
+        },
+        Theme::Light => Palette {
+            bg: rgb(0xFA, 0xFA, 0xFB),
+            text: rgb(0x1C, 0x1C, 0x1E),
+            muted: rgb(0x8A, 0x8A, 0x93),
+            border: rgb(0xDD, 0xDD, 0xE3),
+        },
+        Theme::Dark => Palette {
+            bg: rgb(0x20, 0x21, 0x24),
+            text: rgb(0xEC, 0xEC, 0xF0),
+            muted: rgb(0x98, 0x9A, 0xA4),
+            border: rgb(0x3C, 0x3E, 0x44),
+        },
+    }
+}
+
+// ---------- 状態 ----------
 
 struct Dib {
     data: Vec<u8>,
@@ -38,72 +94,228 @@ enum Content {
     Error(String),
 }
 
+/// 背景画像(上から下へ並んだ 32bit BGRA)
+struct Background {
+    width: i32,
+    height: i32,
+    bgra: Vec<u8>,
+}
+
 struct State {
-    title: String,
-    status: String,
     content: Content,
     monitoring: bool,
     scroll: i32,
     max_scroll: i32,
+    background: Option<Background>,
+    /// 現在のウィンドウサイズに合わせて拡縮済みの背景(幅, 高さ, ビットマップ)
+    background_cache: Option<(i32, i32, HBITMAP)>,
+}
+
+struct Settings {
+    pos: Option<(i32, i32)>,
+    size: Option<(i32, i32)>,
+    opacity: u32,
+    theme: Theme,
+    background: Option<String>,
 }
 
 thread_local! {
-    static STATE: RefCell<State> = RefCell::new(State {
-        title: DEFAULT_TITLE.into(),
-        status: "監視中".into(),
-        content: Content::Unknown,
-        monitoring: true,
-        scroll: 0,
-        max_scroll: 0,
-    });
+    static STATE: RefCell<State> = const {
+        RefCell::new(State {
+            content: Content::Unknown,
+            monitoring: true,
+            scroll: 0,
+            max_scroll: 0,
+            background: None,
+            background_cache: None,
+        })
+    };
+    static SETTINGS: RefCell<Settings> = const {
+        RefCell::new(Settings {
+            pos: None,
+            size: None,
+            opacity: DEFAULT_OPACITY,
+            theme: Theme::Yellow,
+            background: None,
+        })
+    };
+    static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
 }
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
-fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
-    COLORREF(r as u32 | (g as u32) << 8 | (b as u32) << 16)
-}
-
-// ---------- 設定（ウィンドウ位置の保存） ----------
+// ---------- 設定ファイル ----------
 
 fn settings_path() -> Option<PathBuf> {
     let dir = PathBuf::from(std::env::var_os("APPDATA")?).join("ClipSticky");
     std::fs::create_dir_all(&dir).ok()?;
-    Some(dir.join("position.txt"))
+    Some(dir.join("settings.txt"))
 }
 
-/// 保存形式: "left,top,opacity(%)"
-fn load_settings() -> (Option<(i32, i32)>, u32) {
-    let parse = || -> Option<((i32, i32), u32)> {
-        let text = std::fs::read_to_string(settings_path()?).ok()?;
-        let mut it = text.trim().split(',');
-        let l = it.next()?.parse::<i32>().ok()?;
-        let t = it.next()?.parse::<i32>().ok()?;
-        let o = it.next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(DEFAULT_OPACITY);
-        Some(((l, t), o.clamp(10, 100)))
+/// 保存形式は `key=value` の行。未知のキーや壊れた行は無視する
+fn load_settings() {
+    let Some(text) = settings_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return;
     };
-    match parse() {
-        Some(((l, t), o)) => ((l >= 0 && t >= 0).then_some((l, t)), o),
-        None => (None, DEFAULT_OPACITY),
-    }
+    SETTINGS.with(|s| {
+        let mut s = s.borrow_mut();
+        let (mut left, mut top, mut width, mut height) = (None, None, None, None);
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else { continue };
+            let value = value.trim();
+            match key.trim() {
+                "left" => left = value.parse::<i32>().ok(),
+                "top" => top = value.parse::<i32>().ok(),
+                "width" => width = value.parse::<i32>().ok(),
+                "height" => height = value.parse::<i32>().ok(),
+                "opacity" => {
+                    if let Ok(v) = value.parse::<u32>() {
+                        s.opacity = v.clamp(10, 100);
+                    }
+                }
+                "theme" => {
+                    if let Some(&(t, _, _)) = THEMES.iter().find(|(_, id, _)| *id == value) {
+                        s.theme = t;
+                    }
+                }
+                "background" if !value.is_empty() => s.background = Some(value.to_string()),
+                _ => {}
+            }
+        }
+        s.pos = left.zip(top);
+        s.size = width.zip(height).filter(|&(w, h)| w > 0 && h > 0);
+    });
 }
 
 unsafe fn save_settings(hwnd: HWND) {
     let mut rc = RECT::default();
-    if unsafe { GetWindowRect(hwnd, &mut rc) }.is_ok() {
-        if let Some(path) = settings_path() {
-            let opacity = OPACITY.with(|o| o.get());
-            let _ = std::fs::write(path, format!("{},{},{}", rc.left, rc.top, opacity));
-        }
+    if unsafe { GetWindowRect(hwnd, &mut rc) }.is_err() {
+        return;
     }
+    let Some(path) = settings_path() else { return };
+    let text = SETTINGS.with(|s| {
+        let s = s.borrow();
+        let theme = THEMES.iter().find(|(t, _, _)| *t == s.theme).map_or("yellow", |t| t.1);
+        let mut text = format!(
+            "left={}\ntop={}\nwidth={}\nheight={}\nopacity={}\ntheme={}\n",
+            rc.left,
+            rc.top,
+            rc.right - rc.left,
+            rc.bottom - rc.top,
+            s.opacity,
+            theme
+        );
+        if let Some(bg) = &s.background {
+            text.push_str(&format!("background={bg}\n"));
+        }
+        text
+    });
+    let _ = std::fs::write(path, text);
 }
 
 unsafe fn apply_opacity(hwnd: HWND, percent: u32) {
-    OPACITY.with(|o| o.set(percent));
+    SETTINGS.with(|s| s.borrow_mut().opacity = percent);
     unsafe {
         let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), (percent * 255 / 100) as u8, LWA_ALPHA);
+    }
+}
+
+/// テーマに合わせて DWM の枠線色を更新し、再描画する
+unsafe fn apply_theme(hwnd: HWND, theme: Theme) {
+    SETTINGS.with(|s| s.borrow_mut().theme = theme);
+    unsafe {
+        let border = palette(theme).border.0;
+        // DWMWA_BORDER_COLOR (Windows 11 以降。未対応の OS ではエラーになるだけ)
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWINDOWATTRIBUTE(34),
+            &border as *const u32 as *const _,
+            std::mem::size_of::<u32>() as u32,
+        );
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
+}
+
+// ---------- 背景画像 ----------
+
+fn load_background(path: &str) -> Option<Background> {
+    let mut img = image::open(path).ok()?;
+    if img.width().max(img.height()) > BACKGROUND_MAX_SIDE {
+        img = img.thumbnail(BACKGROUND_MAX_SIDE, BACKGROUND_MAX_SIDE);
+    }
+    let rgba = img.to_rgba8();
+    let (width, height) = (rgba.width() as i32, rgba.height() as i32);
+    let mut bgra = Vec::with_capacity(rgba.as_raw().len());
+    for px in rgba.pixels() {
+        // 透過部分は白と合成する
+        let a = px[3] as u32;
+        let blend = |c: u8| ((c as u32 * a + 255 * (255 - a)) / 255) as u8;
+        bgra.extend_from_slice(&[blend(px[2]), blend(px[1]), blend(px[0]), 255]);
+    }
+    Some(Background { width, height, bgra })
+}
+
+/// `Some(path)` で画像を設定、`None` で解除。読み込みに失敗したら false
+unsafe fn set_background(hwnd: HWND, path: Option<String>) -> bool {
+    let background = match &path {
+        Some(p) => match load_background(p) {
+            Some(bg) => Some(bg),
+            None => return false,
+        },
+        None => None,
+    };
+    STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        s.background = background;
+        if let Some((_, _, bmp)) = s.background_cache.take() {
+            unsafe {
+                let _ = DeleteObject(bmp.into());
+            }
+        }
+    });
+    SETTINGS.with(|s| s.borrow_mut().background = path);
+    unsafe {
+        save_settings(hwnd);
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
+    true
+}
+
+unsafe fn pick_image(owner: HWND) -> Option<String> {
+    let mut file = [0u16; 1024];
+    let filter: Vec<u16> =
+        "画像ファイル\0*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp\0すべてのファイル\0*.*\0\0"
+            .encode_utf16()
+            .collect();
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: owner,
+        lpstrFilter: PCWSTR(filter.as_ptr()),
+        lpstrFile: PWSTR(file.as_mut_ptr()),
+        nMaxFile: file.len() as u32,
+        Flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR,
+        ..Default::default()
+    };
+    if unsafe { GetOpenFileNameW(&mut ofn) }.as_bool() {
+        let len = file.iter().position(|&c| c == 0)?;
+        Some(String::from_utf16_lossy(&file[..len]))
+    } else {
+        None
+    }
+}
+
+unsafe fn choose_background(hwnd: HWND, path: String) {
+    if !unsafe { set_background(hwnd, Some(path)) } {
+        unsafe {
+            let _ = MessageBoxW(
+                Some(hwnd),
+                w!("画像を読み込めませんでした。\n対応形式: PNG / JPEG / BMP / GIF / WebP"),
+                w!("ClipSticky"),
+                MB_OK | MB_ICONWARNING,
+            );
+        }
     }
 }
 
@@ -223,19 +435,6 @@ fn refresh_clipboard() {
     let content = read_clipboard();
     STATE.with(|s| {
         let mut s = s.borrow_mut();
-        let (title, detected) = match &content {
-            Content::Image(_) => ("（画像）", "（画像を検出）"),
-            Content::Text(_) => ("（テキスト）", "（テキストを検出）"),
-            Content::Files(_) => ("（ファイル）", "（ファイルを検出）"),
-            Content::Unknown => ("", "（未知の形式）"),
-            Content::Error(_) => ("（エラー）", "（エラー）"),
-        };
-        s.title = format!("{DEFAULT_TITLE}{title}");
-        s.status = if s.monitoring {
-            format!("監視中{detected}")
-        } else {
-            "一時停止中".into()
-        };
         s.content = content;
         s.scroll = 0;
     });
@@ -244,46 +443,39 @@ fn refresh_clipboard() {
 // ---------- レイアウトと描画 ----------
 
 struct Layout {
-    title: RECT,
+    header: RECT,
+    close: RECT,
     content: RECT,
-    sep_y: i32,
-    status: RECT,
-    button: RECT,
+    footer: RECT,
 }
 
 fn layout(w: i32, h: i32, dpi: u32) -> Layout {
     let s = |v: i32| v * dpi as i32 / 96;
-    let pad = s(11);
-    let title = RECT { left: pad, top: pad, right: w - pad, bottom: pad + s(22) };
-    let button = RECT {
-        left: w - pad - s(64),
-        top: h - pad - s(24),
-        right: w - pad,
-        bottom: h - pad,
-    };
-    let sep_y = button.top - s(6);
+    let pad = s(16);
+    let close = RECT { left: w - s(12) - s(28), top: s(10), right: w - s(12), bottom: s(10) + s(28) };
+    let header = RECT { left: pad, top: s(12), right: close.left - s(4), bottom: s(12) + s(24) };
+    let footer = RECT { left: pad, top: h - s(12) - s(18), right: w - pad - s(14), bottom: h - s(12) };
     let content = RECT {
         left: pad,
-        top: title.bottom + s(4),
+        top: header.bottom + s(8),
         right: w - pad,
-        bottom: sep_y - s(6),
+        bottom: footer.top - s(8),
     };
-    let status = RECT { left: pad, top: button.top, right: button.left - s(8), bottom: button.bottom };
-    Layout { title, content, sep_y, status, button }
+    Layout { header, close, content, footer }
 }
 
 fn in_rect(r: &RECT, x: i32, y: i32) -> bool {
     x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
 
-unsafe fn make_font(dpi: u32, bold: bool) -> HFONT {
+unsafe fn make_font(dpi: u32, px: i32, bold: bool) -> HFONT {
     unsafe {
         CreateFontW(
-            -(16 * dpi as i32 / 96),
+            -(px * dpi as i32 / 96),
             0,
             0,
             0,
-            if bold { FW_BOLD.0 as i32 } else { FW_NORMAL.0 as i32 },
+            if bold { FW_SEMIBOLD.0 as i32 } else { FW_NORMAL.0 as i32 },
             0,
             0,
             0,
@@ -302,6 +494,113 @@ unsafe fn draw_text(hdc: HDC, text: &str, rc: &mut RECT, flags: DRAW_TEXT_FORMAT
     unsafe { DrawTextW(hdc, &mut buf, rc, flags) };
 }
 
+fn type_label(content: &Content) -> &'static str {
+    match content {
+        Content::Text(_) => "テキスト",
+        Content::Image(_) => "画像",
+        Content::Files(_) => "ファイル",
+        Content::Unknown => "クリップボード",
+        Content::Error(_) => "エラー",
+    }
+}
+
+fn detail(content: &Content) -> String {
+    match content {
+        Content::Text(t) => format!("{} 文字", t.chars().count()),
+        Content::Image(d) => format!("{}×{}", d.width, d.height),
+        Content::Files(t) => format!("{} 件", t.lines().count()),
+        Content::Unknown | Content::Error(_) => String::new(),
+    }
+}
+
+/// 背景画像を cover(縦横比を保ち、はみ出た分は中央でトリミング)で描き、テーマ色を重ねる
+unsafe fn draw_background(mem: HDC, st: &mut State, w: i32, h: i32, pal: &Palette) {
+    unsafe {
+        let Some(bg) = &st.background else { return };
+        if st.background_cache.map(|(cw, ch, _)| (cw, ch)) != Some((w, h)) {
+            if let Some((_, _, old)) = st.background_cache.take() {
+                let _ = DeleteObject(old.into());
+            }
+            let bmp = CreateCompatibleBitmap(mem, w, h);
+            let dc = CreateCompatibleDC(Some(mem));
+            let old = SelectObject(dc, bmp.into());
+
+            let scale = (w as f64 / bg.width as f64).max(h as f64 / bg.height as f64);
+            let sw = ((w as f64 / scale).round() as i32).clamp(1, bg.width);
+            let sh = ((h as f64 / scale).round() as i32).clamp(1, bg.height);
+            let (sx, sy) = ((bg.width - sw) / 2, (bg.height - sh) / 2);
+            let info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: bg.width,
+                    biHeight: -bg.height, // 上から下
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            SetStretchBltMode(dc, HALFTONE);
+            let _ = SetBrushOrgEx(dc, 0, 0, None);
+            StretchDIBits(
+                dc,
+                0,
+                0,
+                w,
+                h,
+                sx,
+                sy,
+                sw,
+                sh,
+                Some(bg.bgra.as_ptr() as *const _),
+                &info,
+                DIB_RGB_COLORS,
+                SRCCOPY,
+            );
+            SelectObject(dc, old);
+            let _ = DeleteDC(dc);
+            st.background_cache = Some((w, h, bmp));
+        }
+        let (_, _, bmp) = st.background_cache.unwrap();
+        let dc = CreateCompatibleDC(Some(mem));
+        let old = SelectObject(dc, bmp.into());
+        let _ = BitBlt(mem, 0, 0, w, h, Some(dc), 0, 0, SRCCOPY);
+        SelectObject(dc, old);
+        let _ = DeleteDC(dc);
+
+        // 文字を読みやすくするため、テーマ色を半透明で重ねる
+        let scrim_dc = CreateCompatibleDC(Some(mem));
+        let scrim_bmp = CreateCompatibleBitmap(mem, 1, 1);
+        let old = SelectObject(scrim_dc, scrim_bmp.into());
+        let brush = CreateSolidBrush(pal.bg);
+        FillRect(scrim_dc, &RECT { left: 0, top: 0, right: 1, bottom: 1 }, brush);
+        let _ = DeleteObject(brush.into());
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: SCRIM_ALPHA,
+            AlphaFormat: 0,
+        };
+        let _ = AlphaBlend(mem, 0, 0, w, h, scrim_dc, 0, 0, 1, 1, blend);
+        SelectObject(scrim_dc, old);
+        let _ = DeleteObject(scrim_bmp.into());
+        let _ = DeleteDC(scrim_dc);
+    }
+}
+
+unsafe fn fill_ellipse(hdc: HDC, rc: &RECT, color: COLORREF) {
+    unsafe {
+        let brush = CreateSolidBrush(color);
+        let old_brush = SelectObject(hdc, brush.into());
+        let old_pen = SelectObject(hdc, GetStockObject(NULL_PEN));
+        let _ = Ellipse(hdc, rc.left, rc.top, rc.right, rc.bottom);
+        SelectObject(hdc, old_pen);
+        SelectObject(hdc, old_brush);
+        let _ = DeleteObject(brush.into());
+    }
+}
+
 unsafe fn paint(hwnd: HWND) {
     unsafe {
         let mut ps = PAINTSTRUCT::default();
@@ -312,44 +611,46 @@ unsafe fn paint(hwnd: HWND) {
         let dpi = GetDpiForWindow(hwnd);
         let s = |v: i32| v * dpi as i32 / 96;
         let l = layout(w, h, dpi);
+        let pal = palette(SETTINGS.with(|s| s.borrow().theme));
 
         // ダブルバッファ
         let mem = CreateCompatibleDC(Some(hdc));
         let bmp = CreateCompatibleBitmap(hdc, w, h);
         let old_bmp = SelectObject(mem, bmp.into());
 
-        let bg = CreateSolidBrush(rgb(0xFF, 0xF7, 0xC8));
+        let bg = CreateSolidBrush(pal.bg);
         FillRect(mem, &client, bg);
         let _ = DeleteObject(bg.into());
-        let border = CreatePen(PS_SOLID, 1, rgb(0x96, 0x96, 0x82));
-        let old_pen = SelectObject(mem, border.into());
-        let old_brush = SelectObject(mem, GetStockObject(NULL_BRUSH));
-        let _ = Rectangle(mem, 0, 0, w, h);
-        SelectObject(mem, old_brush);
-        SelectObject(mem, old_pen);
-        let _ = DeleteObject(border.into());
 
         SetBkMode(mem, TRANSPARENT);
-        let font = make_font(dpi, false);
-        let bold = make_font(dpi, true);
+        let body = make_font(dpi, 15, false);
+        let small = make_font(dpi, 12, false);
+        let label = make_font(dpi, 12, true);
+        let glyph = make_font(dpi, 22, false);
 
         STATE.with(|st| {
             let mut st = st.borrow_mut();
+            draw_background(mem, &mut st, w, h, &pal);
 
-            // タイトル
-            let old_font = SelectObject(mem, bold.into());
-            SetTextColor(mem, rgb(0, 0, 0));
-            let mut r = l.title;
-            draw_text(mem, &st.title, &mut r, DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+            // ヘッダー: 種類ラベルと閉じるボタン
+            let old_font = SelectObject(mem, label.into());
+            SetTextColor(mem, pal.muted);
+            let mut r = l.header;
+            draw_text(mem, type_label(&st.content), &mut r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            SelectObject(mem, glyph.into());
+            let mut r = l.close;
+            draw_text(mem, "×", &mut r, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
 
-            // コンテンツ（クリップして描画）
-            SelectObject(mem, font.into());
+            // コンテンツ(クリップして描画)
+            SelectObject(mem, body.into());
             let area = l.content;
             let saved = SaveDC(mem);
             let _ = IntersectClipRect(mem, area.left, area.top, area.right, area.bottom);
-            let avail_w = (area.right - area.left).min(s(MAX_CONTENT_W));
+            let avail_w = area.right - area.left;
+            let avail_h = area.bottom - area.top;
             let top = area.top - st.scroll;
             let content_h;
+            SetTextColor(mem, pal.text);
             match &st.content {
                 Content::Text(t) | Content::Files(t) | Content::Error(t) => {
                     let text = if matches!(st.content, Content::Error(_)) {
@@ -357,28 +658,30 @@ unsafe fn paint(hwnd: HWND) {
                     } else {
                         t.clone()
                     };
-                    let mut r = RECT { left: area.left, top, right: area.left + avail_w, bottom: top };
+                    let mut r = RECT { left: area.left, top, right: area.right, bottom: top };
                     draw_text(mem, &text, &mut r, DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
                     content_h = r.bottom - top;
                     draw_text(mem, &text, &mut r, DT_WORDBREAK | DT_NOPREFIX);
                 }
                 Content::Unknown => {
-                    SetTextColor(mem, rgb(0x80, 0x80, 0x80));
+                    SetTextColor(mem, pal.muted);
                     let mut r = RECT { left: area.left, top, right: area.right, bottom: top + s(22) };
-                    draw_text(mem, "未知の形式（または空）です。", &mut r, DT_WORDBREAK | DT_NOPREFIX);
+                    draw_text(mem, "未知の形式(または空)です。", &mut r, DT_WORDBREAK | DT_NOPREFIX);
                     content_h = s(22);
                 }
                 Content::Image(d) => {
-                    // Uniform: 縦横比を保って最大 340x140 に収める
-                    let (mw, mh) = (avail_w, s(MAX_IMAGE_H));
-                    let scale = (mw as f64 / d.width as f64).min(mh as f64 / d.height as f64);
-                    let (dw, dh) = ((d.width as f64 * scale) as i32, (d.height as f64 * scale) as i32);
+                    // 縦横比を保ち、表示領域に収める
+                    let scale = (avail_w as f64 / d.width as f64).min(avail_h as f64 / d.height as f64);
+                    let (dw, dh) = (
+                        ((d.width as f64 * scale) as i32).max(1),
+                        ((d.height as f64 * scale) as i32).max(1),
+                    );
                     SetStretchBltMode(mem, HALFTONE);
                     let _ = SetBrushOrgEx(mem, 0, 0, None);
                     StretchDIBits(
                         mem,
                         area.left,
-                        top,
+                        area.top,
                         dw,
                         dh,
                         0,
@@ -390,45 +693,50 @@ unsafe fn paint(hwnd: HWND) {
                         DIB_RGB_COLORS,
                         SRCCOPY,
                     );
-                    content_h = dh;
+                    content_h = 0; // 画像はスクロールしない
                 }
             }
             let _ = RestoreDC(mem, saved);
-            st.max_scroll = (content_h - (area.bottom - area.top)).max(0);
+            st.max_scroll = (content_h - avail_h).max(0);
             st.scroll = st.scroll.clamp(0, st.max_scroll);
 
-            // 区切り線
-            let sep = CreatePen(PS_SOLID, 1, rgb(0xC8, 0xC8, 0xB0));
-            let old = SelectObject(mem, sep.into());
-            let _ = MoveToEx(mem, l.title.left, l.sep_y, None);
-            let _ = LineTo(mem, l.title.right, l.sep_y);
-            SelectObject(mem, old);
-            let _ = DeleteObject(sep.into());
+            // フッター: 状態インジケーターと詳細
+            SelectObject(mem, small.into());
+            let dot = s(8);
+            let cy = (l.footer.top + l.footer.bottom) / 2;
+            let dot_color = if st.monitoring { rgb(0x34, 0xC7, 0x59) } else { rgb(0xFF, 0x9F, 0x0A) };
+            fill_ellipse(
+                mem,
+                &RECT { left: l.footer.left, top: cy - dot / 2, right: l.footer.left + dot, bottom: cy + dot / 2 },
+                dot_color,
+            );
+            let status = if st.monitoring { "監視中" } else { "一時停止中" };
+            let info = match detail(&st.content) {
+                d if d.is_empty() => status.to_string(),
+                d => format!("{status}  ·  {d}"),
+            };
+            SetTextColor(mem, pal.muted);
+            let mut r = RECT { left: l.footer.left + dot + s(8), ..l.footer };
+            draw_text(mem, &info, &mut r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
 
-            // ステータス
-            SetTextColor(mem, rgb(0x70, 0x70, 0x60));
-            let mut r = l.status;
-            draw_text(mem, &st.status, &mut r, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
-
-            // 閉じるボタン
-            let btn_bg = CreateSolidBrush(rgb(0xE1, 0xE1, 0xE1));
-            let btn_pen = CreatePen(PS_SOLID, 1, rgb(0xAD, 0xAD, 0xAD));
-            let ob = SelectObject(mem, btn_bg.into());
-            let op = SelectObject(mem, btn_pen.into());
-            let _ = Rectangle(mem, l.button.left, l.button.top, l.button.right, l.button.bottom);
-            SelectObject(mem, ob);
-            SelectObject(mem, op);
-            let _ = DeleteObject(btn_bg.into());
-            let _ = DeleteObject(btn_pen.into());
-            SetTextColor(mem, rgb(0, 0, 0));
-            let mut r = l.button;
-            draw_text(mem, "閉じる", &mut r, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
+            // リサイズつまみ(右下の斜線)
+            let pen = CreatePen(PS_SOLID, 1, pal.muted);
+            let old_pen = SelectObject(mem, pen.into());
+            for k in 1..=3 {
+                let d = s(4) * k;
+                let (x, y) = (w - s(6), h - s(6));
+                let _ = MoveToEx(mem, x, y - d, None);
+                let _ = LineTo(mem, x - d, y);
+            }
+            SelectObject(mem, old_pen);
+            let _ = DeleteObject(pen.into());
 
             SelectObject(mem, old_font);
         });
 
-        let _ = DeleteObject(font.into());
-        let _ = DeleteObject(bold.into());
+        for f in [body, small, label, glyph] {
+            let _ = DeleteObject(f.into());
+        }
         let _ = BitBlt(hdc, 0, 0, w, h, Some(mem), 0, 0, SRCCOPY);
         SelectObject(mem, old_bmp);
         let _ = DeleteObject(bmp.into());
@@ -444,12 +752,10 @@ const TRAY_ID: u32 = 1;
 const CMD_SHOW: usize = 1;
 const CMD_TOGGLE: usize = 2;
 const CMD_EXIT: usize = 3;
+const CMD_BG_SELECT: usize = 4;
+const CMD_BG_CLEAR: usize = 5;
 const CMD_OPACITY_BASE: usize = 100; // 100 + OPACITY_CHOICES のインデックス
-
-thread_local! {
-    static OPACITY: std::cell::Cell<u32> = const { std::cell::Cell::new(DEFAULT_OPACITY) };
-    static TASKBAR_CREATED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
+const CMD_THEME_BASE: usize = 200; // 200 + THEMES のインデックス
 
 /// 黄色い付箋風の 32x32 アイコンを生成する
 unsafe fn create_icon() -> HICON {
@@ -461,11 +767,11 @@ unsafe fn create_icon() -> HICON {
                 let edge = x < 2 || y < 2 || x >= N - 2 || y >= N - 2;
                 let line = (9..N - 9).contains(&x) && y >= 9 && y < N - 6 && (y - 9) % 6 < 2;
                 px[y * N + x] = if edge {
-                    0xFF96_9682
+                    0xFFE6_D382
                 } else if line {
-                    0xFF70_7060
+                    0xFF8C_7F4A
                 } else {
-                    0xFFFF_F0A8
+                    0xFFFF_F4B8
                 };
             }
         }
@@ -534,40 +840,71 @@ unsafe fn toggle_monitoring(hwnd: HWND) {
     STATE.with(|s| {
         let mut s = s.borrow_mut();
         s.monitoring = !s.monitoring;
-        s.status = if s.monitoring { "監視中".into() } else { "一時停止中".into() };
     });
     unsafe {
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
 }
 
+unsafe fn add_item(menu: HMENU, flags: MENU_ITEM_FLAGS, id: usize, label: &str) {
+    let mut buf = wide(label);
+    buf.push(0);
+    unsafe {
+        let _ = AppendMenuW(menu, flags, id, PCWSTR(buf.as_ptr()));
+    }
+}
+
+unsafe fn add_submenu(menu: HMENU, label: &str, build: impl FnOnce(HMENU)) {
+    unsafe {
+        if let Ok(sub) = CreatePopupMenu() {
+            build(sub);
+            add_item(menu, MF_POPUP, sub.0 as usize, label);
+        }
+    }
+}
+
+fn check(on: bool) -> MENU_ITEM_FLAGS {
+    if on { MF_STRING | MF_CHECKED } else { MF_STRING }
+}
+
 unsafe fn show_tray_menu(hwnd: HWND) {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         let monitoring = STATE.with(|s| s.borrow().monitoring);
-        let toggle = wide(if monitoring { "監視を一時停止\0" } else { "監視を再開\0" });
-        let _ = AppendMenuW(menu, MF_STRING, CMD_SHOW, w!("表示"));
-        let _ = AppendMenuW(menu, MF_STRING, CMD_TOGGLE, PCWSTR(toggle.as_ptr()));
-        let current = OPACITY.with(|o| o.get());
-        if let Ok(sub) = CreatePopupMenu() {
+        let (opacity, theme, has_bg) = SETTINGS.with(|s| {
+            let s = s.borrow();
+            (s.opacity, s.theme, s.background.is_some())
+        });
+
+        add_item(menu, MF_STRING, CMD_SHOW, "表示");
+        add_item(menu, MF_STRING, CMD_TOGGLE, if monitoring { "監視を一時停止" } else { "監視を再開" });
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
+        add_submenu(menu, "テーマ", |sub| {
+            for (i, &(t, _, name)) in THEMES.iter().enumerate() {
+                add_item(sub, check(t == theme), CMD_THEME_BASE + i, name);
+            }
+        });
+        add_submenu(menu, "透明度", |sub| {
             for (i, &pct) in OPACITY_CHOICES.iter().enumerate() {
                 let label = if pct == DEFAULT_OPACITY {
-                    format!("{pct}%（標準）\0")
+                    format!("{pct}%(標準)")
                 } else {
-                    format!("{pct}%\0")
+                    format!("{pct}%")
                 };
-                let label = wide(&label);
-                let flags = if pct == current { MF_STRING | MF_CHECKED } else { MF_STRING };
-                let _ = AppendMenuW(sub, flags, CMD_OPACITY_BASE + i, PCWSTR(label.as_ptr()));
+                add_item(sub, check(pct == opacity), CMD_OPACITY_BASE + i, &label);
             }
-            let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("透明度"));
-        }
+        });
+        add_submenu(menu, "背景画像", |sub| {
+            add_item(sub, MF_STRING, CMD_BG_SELECT, "画像を選択…");
+            let clear = if has_bg { MF_STRING } else { MF_STRING | MF_GRAYED };
+            add_item(sub, clear, CMD_BG_CLEAR, "解除");
+        });
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(menu, MF_STRING, CMD_EXIT, w!("終了"));
+        add_item(menu, MF_STRING, CMD_EXIT, "終了");
 
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);
-        // メニューが閉じなくなる問題の回避（前面化してから表示し、WM_NULL を送る）
+        // メニューが閉じなくなる問題の回避(前面化してから表示し、WM_NULL を送る)
         let _ = SetForegroundWindow(hwnd);
         let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, Some(0), hwnd, None);
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
@@ -579,8 +916,20 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             CMD_EXIT => {
                 let _ = DestroyWindow(hwnd);
             }
+            CMD_BG_SELECT => {
+                if let Some(path) = pick_image(hwnd) {
+                    choose_background(hwnd, path);
+                }
+            }
+            CMD_BG_CLEAR => {
+                set_background(hwnd, None);
+            }
             c if (CMD_OPACITY_BASE..CMD_OPACITY_BASE + OPACITY_CHOICES.len()).contains(&c) => {
                 apply_opacity(hwnd, OPACITY_CHOICES[c - CMD_OPACITY_BASE]);
+                save_settings(hwnd);
+            }
+            c if (CMD_THEME_BASE..CMD_THEME_BASE + THEMES.len()).contains(&c) => {
+                apply_theme(hwnd, THEMES[c - CMD_THEME_BASE].0);
                 save_settings(hwnd);
             }
             _ => {}
@@ -597,18 +946,16 @@ unsafe fn on_clipboard_update(hwnd: HWND) {
         }
         refresh_clipboard();
         // フォーカスを奪わずに前面へ出す
-        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        let _ = SetWindowPos(
-            hwnd,
-            Some(HWND_TOPMOST),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+        show_window(hwnd);
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
+}
+
+fn lparam_point(lparam: LPARAM) -> (i32, i32) {
+    (
+        (lparam.0 & 0xFFFF) as i16 as i32,
+        ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+    )
 }
 
 unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -636,33 +983,43 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             }
             WM_ERASEBKGND => LRESULT(1),
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
-            // 非クライアント領域をなくす（枠なしでもリサイズ可能にするため WS_THICKFRAME を付けている）
+            WM_GETMINMAXINFO => {
+                let info = &mut *(lparam.0 as *mut MINMAXINFO);
+                let dpi = GetDpiForWindow(hwnd) as i32;
+                info.ptMinTrackSize = POINT { x: MIN_SIZE.0 * dpi / 96, y: MIN_SIZE.1 * dpi / 96 };
+                LRESULT(0)
+            }
+            // 非クライアント領域をなくす(枠なしでもリサイズ可能にするため WS_THICKFRAME を付けている)
             WM_NCCALCSIZE if wparam.0 != 0 => LRESULT(0),
             WM_NCHITTEST => {
-                let mut pt = POINT {
-                    x: (lparam.0 & 0xFFFF) as i16 as i32,
-                    y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
-                };
+                let (x, y) = lparam_point(lparam);
+                let mut pt = POINT { x, y };
                 let _ = ScreenToClient(hwnd, &mut pt);
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
                 let dpi = GetDpiForWindow(hwnd);
                 let l = layout(rc.right, rc.bottom, dpi);
-                let grip = 10 * dpi as i32 / 96;
-                if in_rect(&l.button, pt.x, pt.y) {
+                let edge = 6 * dpi as i32 / 96;
+                let grip = 14 * dpi as i32 / 96;
+                let (right, bottom) = (pt.x >= rc.right - edge, pt.y >= rc.bottom - edge);
+                if in_rect(&l.close, pt.x, pt.y) {
                     LRESULT(HTCLIENT as isize)
-                } else if pt.x >= rc.right - grip && pt.y >= rc.bottom - grip {
+                } else if (pt.x >= rc.right - grip && pt.y >= rc.bottom - grip) || (right && bottom) {
                     LRESULT(HTBOTTOMRIGHT as isize)
+                } else if right {
+                    LRESULT(HTRIGHT as isize)
+                } else if bottom {
+                    LRESULT(HTBOTTOM as isize)
                 } else {
                     LRESULT(HTCAPTION as isize) // どこをドラッグしても移動できる
                 }
             }
             WM_LBUTTONDOWN => {
-                let (x, y) = ((lparam.0 & 0xFFFF) as i16 as i32, ((lparam.0 >> 16) & 0xFFFF) as i16 as i32);
+                let (x, y) = lparam_point(lparam);
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
                 let l = layout(rc.right, rc.bottom, GetDpiForWindow(hwnd));
-                if in_rect(&l.button, x, y) {
+                if in_rect(&l.close, x, y) {
                     let _ = ShowWindow(hwnd, SW_HIDE);
                 }
                 LRESULT(0)
@@ -674,6 +1031,18 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     s.scroll = (s.scroll - delta / 3).clamp(0, s.max_scroll);
                 });
                 let _ = InvalidateRect(Some(hwnd), None, false);
+                LRESULT(0)
+            }
+            WM_DROPFILES => {
+                // 画像ファイルをドロップして背景に設定する
+                let drop = HDROP(wparam.0 as *mut _);
+                let len = DragQueryFileW(drop, 0, None) as usize;
+                let mut buf = vec![0u16; len + 1];
+                let n = DragQueryFileW(drop, 0, Some(&mut buf)) as usize;
+                DragFinish(drop);
+                if n > 0 {
+                    choose_background(hwnd, String::from_utf16_lossy(&buf[..n]));
+                }
                 LRESULT(0)
             }
             WM_SIZE => {
@@ -711,10 +1080,32 @@ fn main() -> windows::core::Result<()> {
         };
         RegisterClassW(&wc);
 
-        let dpi = GetDpiForSystem();
-        let (width, height) = (380 * dpi as i32 / 96, 220 * dpi as i32 / 96);
-        let (pos, opacity) = load_settings();
-        let (x, y) = pos.unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
+        load_settings();
+        let (saved_pos, saved_size, opacity, theme, background) = SETTINGS.with(|s| {
+            let s = s.borrow();
+            (s.pos, s.size, s.opacity, s.theme, s.background.clone())
+        });
+
+        let dpi = GetDpiForSystem() as i32;
+        let (width, height) = saved_size.unwrap_or((DEFAULT_SIZE.0 * dpi / 96, DEFAULT_SIZE.1 * dpi / 96));
+
+        // 保存位置が画面外(モニター構成の変更など)なら、作業領域の右上に出す
+        let (vx, vy) = (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN));
+        let (vw, vh) = (GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
+        let (x, y) = match saved_pos {
+            Some((x, y)) if x >= vx - width + 40 && x < vx + vw - 40 && y >= vy && y < vy + vh - 40 => (x, y),
+            _ => {
+                let mut work = RECT::default();
+                let _ = SystemParametersInfoW(
+                    SPI_GETWORKAREA,
+                    0,
+                    Some(&mut work as *mut RECT as *mut _),
+                    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+                );
+                let margin = 24 * dpi / 96;
+                (work.right - width - margin, work.top + margin)
+            }
+        };
 
         let hwnd = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
@@ -731,6 +1122,22 @@ fn main() -> windows::core::Result<()> {
             None,
         )?;
         apply_opacity(hwnd, opacity);
+        // 角丸(DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND。Windows 11 以降)
+        let round: i32 = 2;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWINDOWATTRIBUTE(33),
+            &round as *const i32 as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
+        apply_theme(hwnd, theme);
+        DragAcceptFiles(hwnd, true);
+
+        if let Some(path) = background {
+            if !set_background(hwnd, Some(path)) {
+                SETTINGS.with(|s| s.borrow_mut().background = None); // 読み込めなければ忘れる
+            }
+        }
 
         AddClipboardFormatListener(hwnd)?;
         TASKBAR_CREATED.with(|t| t.set(RegisterWindowMessageW(w!("TaskbarCreated"))));
