@@ -17,7 +17,10 @@ jobs:
       - run: cargo build --release --locked
       - name: Installer
         shell: pwsh
-        run: ./packaging/windows/build-installer.ps1 -Version '${{ github.ref_name }}'
+        run: |
+          ./packaging/windows/build-installer.ps1 -Version '${{ github.ref_name }}'
+          # upload-artifact は、複数の場所のファイルを、フォルダごと保存する。zip と同じ場所に集めて、平らにする
+          Copy-Item target\installer\ClipSticky-*-setup.exe* .
       - name: Package
         shell: pwsh
         run: |
@@ -31,7 +34,7 @@ jobs:
           name: windows
           path: |
             ClipSticky-*.zip*
-            target/installer/ClipSticky-*-setup.exe*
+            ClipSticky-*-setup.exe*
 
   macos:
     runs-on: macos-latest
