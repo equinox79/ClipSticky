@@ -47,23 +47,27 @@
 
 ## インストール
 
-[Releases](https://github.com/equinox79/ClipSticky/releases) から、お使いの OS 用の zip をダウンロードします。
-どちらも `.sha256` ファイルで、ダウンロードしたファイルを確認できます。
+[Releases](https://github.com/equinox79/ClipSticky/releases) から、お使いの OS 用のインストーラーをダウンロードします。
+すべてのファイルに `.sha256` が付いていて、ダウンロードしたファイルを確認できます。
 
 ### Windows
 
-1. `ClipSticky-vX.Y.Z-windows-x64.zip` を展開する
-2. `clipsticky.exe` を好きな場所に置いて実行する
+1. `ClipSticky-vX.Y.Z-windows-x64-setup.exe` を実行する
+2. 画面の案内に従う(管理者権限は不要です。「Windows にログインしたときに、自動で起動する」も選べます)
 
-インストーラーはありません。削除するときは exe を消すだけです(設定は `%APPDATA%\ClipSticky` に残ります)。
+`%LOCALAPPDATA%\Programs\ClipSticky` に入り、スタートメニューに登録されます。削除は、「設定」の「アプリ」から行います(設定は `%APPDATA%\ClipSticky` に残ります)。
+
+インストールせずに使いたいときは、`ClipSticky-vX.Y.Z-windows-x64.zip` を展開して、`clipsticky.exe` を好きな場所で実行します。
 
 署名していないため、初回起動時に SmartScreen が警告を出すことがあります。その場合は「詳細情報」→「実行」を選んでください。
 
 ### macOS
 
-1. `ClipSticky-vX.Y.Z-macos-universal.zip`(Apple Silicon・Intel 両対応)を展開する
-2. `ClipSticky.app` を「アプリケーション」に移動する
+1. `ClipSticky-vX.Y.Z-macos-universal.dmg`(Apple Silicon・Intel 両対応)を開く
+2. `ClipSticky.app` を、横の「Applications」にドラッグする
 3. 初回だけ、次のどちらかで開く
+
+(`ClipSticky-vX.Y.Z-macos-universal.zip` を展開して、`ClipSticky.app` を置く方法でも使えます。)
 
 Apple の公証(有料)を受けていないため、初回は「開発元を検証できません」と表示されます。
 

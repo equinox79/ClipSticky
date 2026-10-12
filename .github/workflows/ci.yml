@@ -17,3 +17,11 @@ jobs:
       - run: cargo test --locked
       - run: cargo clippy --locked -- -D warnings
       - run: cargo build --release --locked
+
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./packaging/windows/build-installer.ps1
+      - name: macOS app and dmg
+        if: runner.os == 'macOS'
+        run: ./packaging/macos/build-app.sh

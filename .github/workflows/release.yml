@@ -1,6 +1,6 @@
 name: Release
 
-# `v1.2.3` のようなタグを push すると、Windows と macOS 用の zip をビルドして GitHub Releases に載せる
+# `v1.2.3` のようなタグを push すると、Windows と macOS 用のインストーラーと zip をビルドして GitHub Releases に載せる
 on:
   push:
     tags: ["v*"]
@@ -15,6 +15,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked
+      - name: Installer
+        shell: pwsh
+        run: ./packaging/windows/build-installer.ps1 -Version '${{ github.ref_name }}'
       - name: Package
         shell: pwsh
         run: |
@@ -26,7 +29,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: ClipSticky-*.zip*
+          path: |
+            ClipSticky-*.zip*
+            target/installer/ClipSticky-*-setup.exe*
 
   macos:
     runs-on: macos-latest
@@ -37,7 +42,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          path: target/macos/ClipSticky-*.zip*
+          path: |
+            target/macos/ClipSticky-*.zip*
+            target/macos/ClipSticky-*.dmg*
 
   publish:
     needs: [windows, macos]

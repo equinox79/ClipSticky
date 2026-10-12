@@ -50,23 +50,27 @@ The image was drawn for this README.
 
 ## Install
 
-Download the zip for your OS from [Releases](https://github.com/equinox79/ClipSticky/releases).
-Each file comes with a `.sha256` file so you can verify the download.
+Download the installer for your OS from [Releases](https://github.com/equinox79/ClipSticky/releases).
+Every file comes with a `.sha256` file so you can verify the download.
 
 ### Windows
 
-1. Extract `ClipSticky-vX.Y.Z-windows-x64.zip`
-2. Put `clipsticky.exe` anywhere you like and run it
+1. Run `ClipSticky-vX.Y.Z-windows-x64-setup.exe`
+2. Follow the wizard (no administrator rights needed; you can also choose "Start automatically when I sign in to Windows")
 
-There is no installer. To uninstall, delete the exe (settings stay in `%APPDATA%\ClipSticky`).
+It installs to `%LOCALAPPDATA%\Programs\ClipSticky` and adds a Start menu entry. To uninstall, use Settings → Apps (your settings stay in `%APPDATA%\ClipSticky`).
 
-The exe is not code-signed, so SmartScreen may show a warning on first launch. Choose "More info" → "Run anyway".
+If you prefer not to install, extract `ClipSticky-vX.Y.Z-windows-x64.zip` and run `clipsticky.exe` from anywhere.
+
+The installer and exe are not code-signed, so SmartScreen may show a warning on first launch. Choose "More info" → "Run anyway".
 
 ### macOS
 
-1. Extract `ClipSticky-vX.Y.Z-macos-universal.zip` (works on both Apple Silicon and Intel)
-2. Move `ClipSticky.app` to Applications
+1. Open `ClipSticky-vX.Y.Z-macos-universal.dmg` (works on both Apple Silicon and Intel)
+2. Drag `ClipSticky.app` onto the "Applications" folder next to it
 3. Open it the first time using one of the methods below
+
+(You can also extract `ClipSticky-vX.Y.Z-macos-universal.zip` and place `ClipSticky.app` yourself.)
 
 The app is not notarized by Apple (which costs money), so macOS says it cannot verify the developer on first launch.
 
